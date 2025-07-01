@@ -1,0 +1,37 @@
+{
+    "train_batch_size": 32,
+    "train_micro_batch_size_per_gpu": 4,
+    "gradient_accumulation_steps": 1,
+    "fp16": {
+        "enabled": true,
+        "loss_scale": 0,
+        "loss_scale_window": 200,
+        "initial_scale_power": 8,
+        "hysteresis": 8,
+        "min_loss_scale": 1
+    },
+    "zero_optimization": {
+        "stage": 2,
+        "allgather_partitions": true,
+        "allgather_bucket_size": 2e8,
+        "overlap_comm": true,
+        "reduce_scatter": true,
+        "reduce_bucket_size": 2e8,
+        "contiguous_gradients": true
+    },
+    "gradient_clipping": 5.0,
+    "steps_per_print": 100,
+    "wall_clock_breakdown": false,
+    "tensorboard": {
+        "enabled": true,
+        "output_path": "./work_dirs/tensorboard_logs",
+        "job_name": "vad_training"
+    },
+    "flops_profiler": {
+        "enabled": false,
+        "profile_step": 1000,
+        "module_depth": -1,
+        "top_modules": 5,
+        "detailed": true
+    }
+}

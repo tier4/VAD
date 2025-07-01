@@ -1,7 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import os
 import os.path as osp
+import platform
 import warnings
 
+import torch
+import mmcv
 from mmcv.fileio.file_client import FileClient
 from mmcv.utils import allreduce_params, master_only
 from .hook import HOOKS, Hook
@@ -165,3 +169,73 @@ class CheckpointHook(Hook):
             if self.sync_buffer:
                 allreduce_params(runner.model.buffers())
             self._save_checkpoint(runner)
+
+
+@HOOKS.register_module()
+class DeepSpeedCheckpointHook(CheckpointHook):
+    """
+    Checkpoint Hook with DeepSpeed support.
+    
+    Handles DeepSpeed's special checkpoint format which includes
+    optimizer state and other training artifacts.
+    """
+    
+    @master_only
+    def _save_checkpoint(self, runner):
+        """Save checkpoint with DeepSpeed support."""
+        if hasattr(runner.model, 'save_checkpoint'):
+            # This is a DeepSpeed model
+            if self.by_epoch:
+                save_dir = osp.join(self.out_dir, f'epoch_{runner.epoch + 1}')
+            else:
+                save_dir = osp.join(self.out_dir, f'iter_{runner.iter + 1}')
+            
+            # DeepSpeed saves model, optimizer, and lr_scheduler states
+            runner.model.save_checkpoint(save_dir)
+            
+            # Save additional metadata
+            meta = dict(
+                epoch=runner.epoch + 1,
+                iter=runner.iter + 1,
+                mmcv_version=mmcv.__version__
+            )
+            torch.save(meta, osp.join(save_dir, 'meta.pth'))
+            
+            runner.logger.info(f"Saved DeepSpeed checkpoint at {save_dir}")
+            
+            # Update hook messages
+            if runner.meta is not None:
+                runner.meta.setdefault('hook_msgs', dict())
+                runner.meta['hook_msgs']['last_ckpt'] = save_dir
+            
+            # Symlink latest checkpoint
+            dst_file = osp.join(self.out_dir, 'latest.pth')
+            if platform.system() != 'Windows' and self.args.get('create_symlink', True):
+                if os.path.lexists(dst_file):
+                    os.remove(dst_file)
+                os.symlink(save_dir, dst_file)
+            
+            # Handle max_keep_ckpts for DeepSpeed checkpoints
+            if self.max_keep_ckpts > 0:
+                if self.by_epoch:
+                    current_ckpt = runner.epoch + 1
+                else:
+                    current_ckpt = runner.iter + 1
+                redundant_ckpts = range(
+                    current_ckpt - self.max_keep_ckpts * self.interval, 0,
+                    -self.interval)
+                
+                for _step in redundant_ckpts:
+                    if self.by_epoch:
+                        ckpt_dir = osp.join(self.out_dir, f'epoch_{_step}')
+                    else:
+                        ckpt_dir = osp.join(self.out_dir, f'iter_{_step}')
+                    
+                    if osp.isdir(ckpt_dir):
+                        # Remove DeepSpeed checkpoint directory
+                        import shutil
+                        shutil.rmtree(ckpt_dir)
+                        runner.logger.info(f"Removed old checkpoint: {ckpt_dir}")
+        else:
+            # Standard PyTorch checkpoint saving
+            super()._save_checkpoint(runner)

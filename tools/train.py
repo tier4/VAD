@@ -78,10 +78,15 @@ def parse_args():
         'is allowed.')
     parser.add_argument(
         '--launcher',
-        choices=['none', 'pytorch', 'slurm', 'mpi'],
+        choices=['none', 'pytorch', 'slurm', 'mpi', 'deepspeed'],
         default='none',
         help='job launcher')
-    parser.add_argument('--local-rank', type=int, default=0)
+    parser.add_argument(
+        '--deepspeed',
+        type=str,
+        default=None,
+        help='Path to DeepSpeed config file')
+    parser.add_argument('--local-rank', '--local_rank', type=int, default=0)
     parser.add_argument(
         '--autoscale-lr',
         action='store_true',
@@ -111,6 +116,10 @@ def main():
     if cfg.get('custom_imports', None):
         from mmcv.utils import import_modules_from_strings
         import_modules_from_strings(**cfg['custom_imports'])
+    
+    # Add DeepSpeed config to cfg if provided
+    if args.deepspeed:
+        cfg.deepspeed_config = args.deepspeed
 
     # set cudnn_benchmark
     if cfg.get('cudnn_benchmark', False):
@@ -141,11 +150,16 @@ def main():
         cfg.optimizer['lr'] = cfg.optimizer['lr'] * len(cfg.gpu_ids) / 8
 
     # init distributed env first, since logger depends on the dist info.
-    if args.launcher == 'none':
+    # When using DeepSpeed launcher, LOCAL_RANK is set automatically
+    if args.launcher == 'none' and 'LOCAL_RANK' not in os.environ:
         distributed = False
     else:
         distributed = True
-        init_dist(args.launcher, **cfg.dist_params)
+        # If using DeepSpeed launcher, init with pytorch backend
+        if args.launcher == 'none' and 'LOCAL_RANK' in os.environ:
+            init_dist('pytorch', **cfg.dist_params)
+        else:
+            init_dist(args.launcher, **cfg.dist_params)
         # re-set gpu_ids with distributed training mode
         _, world_size = get_dist_info()
         cfg.gpu_ids = range(world_size)

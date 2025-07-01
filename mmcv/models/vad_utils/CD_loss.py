@@ -487,7 +487,8 @@ class PtsL1Cost(object):
         # import pdb;pdb.set_trace()
         bbox_pred = bbox_pred.view(bbox_pred.size(0),-1)
         gt_bboxes = gt_bboxes.view(num_gts,-1)
-        bbox_cost = torch.cdist(bbox_pred, gt_bboxes, p=1)
+        #bbox_cost = torch.cdist(bbox_pred, gt_bboxes, p=1)
+        bbox_cost = torch.cdist(bbox_pred.float(), gt_bboxes.float(), p=1)
         return bbox_cost * self.weight
 
 @MATCH_COST.register_module()
@@ -516,7 +517,8 @@ class OrderedPtsL1Cost(object):
         # import pdb;pdb.set_trace()
         bbox_pred = bbox_pred.view(bbox_pred.size(0),-1)
         gt_bboxes = gt_bboxes.flatten(2).view(num_gts*num_orders,-1)
-        bbox_cost = torch.cdist(bbox_pred, gt_bboxes, p=1)
+        #bbox_cost = torch.cdist(bbox_pred, gt_bboxes, p=1)
+        bbox_cost = torch.cdist(bbox_pred.float(), gt_bboxes.float(), p=1)
         return bbox_cost * self.weight
 
 @MATCH_COST.register_module()
@@ -622,7 +624,7 @@ def chamfer_distance(src,
             raise NotImplementedError
     else:
         if reduction == 'mean':
-            eps = torch.finfo(torch.float32).eps
+            eps = torch.finfo(loss_src.dtype).eps  # Use dtype-aware epsilon for FP16 compatibility
             loss_src = loss_src.mean(-1).sum() / (avg_factor + eps)
             loss_dst = loss_dst.mean(-1).sum() / (avg_factor + eps)
         elif reduction != 'none':

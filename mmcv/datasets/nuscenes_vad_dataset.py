@@ -922,8 +922,9 @@ class v1CustomDetectionConfig:
         assert set(class_range_x.keys()) == set(DETECTION_NAMES), "Class count mismatch."
         assert dist_th_tp in dist_ths, "dist_th_tp must be in set of dist_ths."
 
-        self.class_range_x = class_range_x
-        self.class_range_y = class_range_y
+        # Ensure these are regular dicts, not dict subclasses that might have pickle issues
+        self.class_range_x = dict(class_range_x) if isinstance(class_range_x, dict) else class_range_x
+        self.class_range_y = dict(class_range_y) if isinstance(class_range_y, dict) else class_range_y
         self.dist_fcn = dist_fcn
         self.dist_ths = dist_ths
         self.dist_th_tp = dist_th_tp
@@ -932,7 +933,7 @@ class v1CustomDetectionConfig:
         self.max_boxes_per_sample = max_boxes_per_sample
         self.mean_ap_weight = mean_ap_weight
 
-        self.class_names = self.class_range_y.keys()
+        self.class_names = list(self.class_range_y.keys())
 
     def __eq__(self, other):
         eq = True
@@ -943,8 +944,8 @@ class v1CustomDetectionConfig:
     def serialize(self) -> dict:
         """ Serialize instance into json-friendly format. """
         return {
-            'class_range_x': self.class_range_x,
-            'class_range_y': self.class_range_y,
+            'class_range_x': dict(self.class_range_x) if hasattr(self.class_range_x, 'keys') else self.class_range_x,
+            'class_range_y': dict(self.class_range_y) if hasattr(self.class_range_y, 'keys') else self.class_range_y,
             'dist_fcn': self.dist_fcn,
             'dist_ths': self.dist_ths,
             'dist_th_tp': self.dist_th_tp,
@@ -967,6 +968,15 @@ class v1CustomDetectionConfig:
                    content['max_boxes_per_sample'],
                    content['mean_ap_weight'])
 
+    def __getstate__(self):
+        """Ensure the object is pickleable by converting any dict_keys to lists"""
+        state = self.__dict__.copy()
+        # Convert any dict_keys objects to lists
+        for key, value in state.items():
+            if type(value).__name__ == 'dict_keys':
+                state[key] = list(value)
+        return state
+    
     @property
     def dist_fcn_callable(self):
         """ Return the distance function corresponding to the dist_fcn string. """
@@ -1032,6 +1042,35 @@ class VADCustomNuScenesDataset(NuScenesDataset):
                             fixed_ptsnum_per_line=map_fixed_ptsnum_per_line,
                             padding_value=self.padding_value)
         self.is_vis_on_test = True
+    
+    def __getstate__(self):
+        """Ensure the dataset is pickleable by converting any dict_keys to lists"""
+        state = self.__dict__.copy()
+        # Recursively check for dict_keys objects
+        def fix_dict_keys(obj):
+            if type(obj).__name__ == 'dict_keys':
+                return list(obj)
+            elif isinstance(obj, dict):
+                return {k: fix_dict_keys(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [fix_dict_keys(item) for item in obj]
+            elif isinstance(obj, tuple):
+                return tuple(fix_dict_keys(item) for item in obj)
+            elif hasattr(obj, '__dict__'):
+                # For nested objects, create a shallow copy and fix its attributes
+                try:
+                    for attr, value in obj.__dict__.items():
+                        if type(value).__name__ == 'dict_keys':
+                            setattr(obj, attr, list(value))
+                except:
+                    pass
+                return obj
+            return obj
+        
+        # Apply the fix to all attributes
+        for key, value in state.items():
+            state[key] = fix_dict_keys(value)
+        return state
 
     @classmethod
     def get_map_classes(cls, map_classes=None):

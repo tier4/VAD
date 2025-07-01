@@ -266,8 +266,9 @@ class VADPerceptionTransformer(BaseModule):
                     prev_bev[:, i] = tmp_prev_bev[:, 0]
 
         # add can bus signals
-        can_bus = bev_queries.new_tensor(
-            [each['can_bus'] for each in kwargs['img_metas']])  # [:, :]
+        # Convert list of numpy arrays to a single numpy array first to avoid warning
+        can_bus_data = np.array([each['can_bus'] for each in kwargs['img_metas']])
+        can_bus = bev_queries.new_tensor(can_bus_data)  # [:, :]
         can_bus = self.can_bus_mlp(can_bus)[None, :, :]
         bev_queries = bev_queries + can_bus * self.use_can_bus
 

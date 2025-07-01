@@ -105,3 +105,14 @@ All code in this repository is under the [Apache License 2.0](https://www.apache
 
 ## Acknowledgement
 VAD is based on the following projects: [mmdet3d](https://github.com/open-mmlab/mmdetection3d), [detr3d](https://github.com/WangYueFt/detr3d), [BEVFormer](https://github.com/fundamentalvision/BEVFormer) and [MapTR](https://github.com/hustvl/MapTR). Many thanks for their excellent contributions to the community.
+
+
+  With FP16 (improved stability):
+  python -m torch.distributed.run --nproc_per_node=8 tools/train.py \
+      configs/VAD/VAD_base_e2e_deepspeed.py \
+      --deepspeed configs/deepspeed/ds_config_zero2.json
+
+  With FP32 (maximum stability):
+  python -m torch.distributed.run --nproc_per_node=8 tools/train.py \
+      configs/VAD/VAD_base_e2e_deepspeed.py \
+      --deepspeed configs/deepspeed/ds_config_zero2_fp32.json

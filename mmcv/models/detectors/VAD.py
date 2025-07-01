@@ -79,6 +79,13 @@ class VAD(MVXTwoStageDetector):
                 img = img.reshape(B * N, C, H, W)
             if self.use_grid_mask:
                 img = self.grid_mask(img)
+            
+            # Convert input to match model dtype (for FP16 compatibility with DeepSpeed)
+            if hasattr(self.img_backbone, 'conv1') and hasattr(self.img_backbone.conv1, 'weight'):
+                model_dtype = self.img_backbone.conv1.weight.dtype
+                model_device = self.img_backbone.conv1.weight.device
+                if img.dtype != model_dtype or img.device != model_device:
+                    img = img.to(device=model_device, dtype=model_dtype)
 
             img_feats = self.img_backbone(img)
             if isinstance(img_feats, dict):

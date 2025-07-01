@@ -504,3 +504,28 @@ else:
                 # clear grads
                 runner.model.zero_grad()
                 runner.optimizer.zero_grad()
+
+
+@HOOKS.register_module()
+class DeepSpeedOptimizerHook(OptimizerHook):
+    """
+    Optimizer Hook for DeepSpeed training.
+    
+    This hook replaces the standard backward and step calls with DeepSpeed's equivalents.
+    Gradient accumulation, clipping, and FP16 are handled by DeepSpeed internally
+    based on the DeepSpeed configuration file.
+    """
+    
+    def __init__(self, grad_clip=None, **kwargs):
+        # Accept grad_clip for compatibility but ignore it - handled by DeepSpeed config
+        super().__init__(grad_clip=None)
+    
+    def after_train_iter(self, runner):
+        # Check if this is actually a DeepSpeed model
+        if hasattr(runner.model, 'backward') and hasattr(runner.model, 'step'):
+            # DeepSpeed engine handles everything internally
+            runner.model.backward(runner.outputs['loss'])
+            runner.model.step()
+        else:
+            # Fallback to standard behavior
+            super().after_train_iter(runner)

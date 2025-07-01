@@ -17,6 +17,9 @@ def bivariate_gaussian_activation(ip):
     sig_x = ip[..., 2:3]
     sig_y = ip[..., 3:4]
     rho = ip[..., 4:5]
+    # Clamp inputs to prevent exponential overflow in FP16
+    sig_x = torch.clamp(sig_x, min=-10, max=10)
+    sig_y = torch.clamp(sig_y, min=-10, max=10)
     sig_x = torch.exp(sig_x)
     sig_y = torch.exp(sig_y)
     rho = torch.tanh(rho)

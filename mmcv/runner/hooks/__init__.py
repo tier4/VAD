@@ -7,3 +7,4 @@ from .checkpoint import CheckpointHook
 from .iter_timer import IterTimerHook
 from .logger import *
 from .vad_hooks import *
+from .gradient_monitor import GradientMonitorHook

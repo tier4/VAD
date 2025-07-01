@@ -5,6 +5,7 @@
 # ---------------------------------------------
 import random
 import warnings
+import json
 
 import numpy as np
 import torch
@@ -69,32 +70,100 @@ def custom_train_detector(model,
         ) for ds in dataset
     ]
 
-    # put model on gpus
-    if distributed:
-        find_unused_parameters = cfg.get('find_unused_parameters', False)
-        # Sets the `find_unused_parameters` parameter in
-        # torch.nn.parallel.DistributedDataParallel
-        model = DistributedDataParallel(
-            model.cuda(),
-            device_ids=[torch.cuda.current_device()],
-            broadcast_buffers=False,
-            find_unused_parameters=find_unused_parameters)
+    # DeepSpeed Integration
+    use_deepspeed = cfg.get('deepspeed_config') is not None
+    using_deepspeed = False  # Initialize flag
+    
+    if use_deepspeed and distributed:
+        import deepspeed
+        
+        # For DeepSpeed, we need a simpler optimizer configuration
+        # The default MMCV optimizer constructor creates too many parameter groups
+        if cfg.optimizer.get('paramwise_cfg'):
+            logger.warning("DeepSpeed: Ignoring paramwise_cfg, using simplified optimizer")
+        
+        # Build a simplified optimizer for DeepSpeed
+        optimizer_cfg = cfg.optimizer.copy()
+        optimizer_cfg.pop('paramwise_cfg', None)  # Remove paramwise config
+        
+        # Get all parameters that require gradients
+        params = [p for p in model.parameters() if p.requires_grad]
+        
+        # Build optimizer with single parameter group
+        optimizer_type = optimizer_cfg.pop('type')
+        if hasattr(torch.optim, optimizer_type):
+            optimizer_class = getattr(torch.optim, optimizer_type)
+        else:
+            raise ValueError(f"Unknown optimizer type: {optimizer_type}")
+        
+        optimizer = optimizer_class(params, **optimizer_cfg)
+        
+        logger.info(f"DeepSpeed optimizer: {optimizer_type} with {len(params)} parameters")
+        
+        # Prepare DeepSpeed config
+        with open(cfg.deepspeed_config, 'r') as f:
+            ds_config = json.load(f)
+        
+        # Update batch size info
+        ds_config['train_micro_batch_size_per_gpu'] = cfg.data.samples_per_gpu
+        ds_config['gradient_accumulation_steps'] = cfg.get('gradient_accumulation_steps', 1)
+        
+        # Calculate total train_batch_size
+        world_size = dist.get_world_size() if dist.is_initialized() else 1
+        train_batch_size = cfg.data.samples_per_gpu * world_size * ds_config['gradient_accumulation_steps']
+        ds_config['train_batch_size'] = train_batch_size
+        
+        # Initialize DeepSpeed
+        # Don't pass model_parameters separately when using a pre-built optimizer
+        model, optimizer, _, _ = deepspeed.initialize(
+            model=model,
+            optimizer=optimizer,
+            config=ds_config
+        )
+        # In DeepSpeed, the model becomes the engine
+        model_to_wrap = model
+        # Set a flag to indicate we're using DeepSpeed
+        using_deepspeed = True
+        
+        # Handle eval_model if provided
         if eval_model is not None:
-            eval_model = DistributedDataParallel(
-                eval_model.cuda(),
+            if distributed:
+                find_unused_parameters = cfg.get('find_unused_parameters', False)
+                eval_model = DistributedDataParallel(
+                    eval_model.cuda(),
+                    device_ids=[torch.cuda.current_device()],
+                    broadcast_buffers=False,
+                    find_unused_parameters=find_unused_parameters)
+            else:
+                eval_model = MMDataParallel(
+                    eval_model.cuda(cfg.gpu_ids[0]), device_ids=cfg.gpu_ids)
+    else:
+        # Build optimizer
+        optimizer = build_optimizer(model, cfg.optimizer)
+        # Not using DeepSpeed
+        using_deepspeed = False
+        
+        # Standard DDP wrapping
+        if distributed:
+            find_unused_parameters = cfg.get('find_unused_parameters', False)
+            model = DistributedDataParallel(
+                model.cuda(),
                 device_ids=[torch.cuda.current_device()],
                 broadcast_buffers=False,
                 find_unused_parameters=find_unused_parameters)
-    else:
-        model = MMDataParallel(
-            model.cuda(cfg.gpu_ids[0]), device_ids=cfg.gpu_ids)
-        if eval_model is not None:
-            eval_model = MMDataParallel(
-                eval_model.cuda(cfg.gpu_ids[0]), device_ids=cfg.gpu_ids)
-
-
-    # build runner
-    optimizer = build_optimizer(model, cfg.optimizer)
+            if eval_model is not None:
+                eval_model = DistributedDataParallel(
+                    eval_model.cuda(),
+                    device_ids=[torch.cuda.current_device()],
+                    broadcast_buffers=False,
+                    find_unused_parameters=find_unused_parameters)
+        else:
+            model = DataParallel(
+                model.cuda(cfg.gpu_ids[0]), device_ids=cfg.gpu_ids)
+            if eval_model is not None:
+                eval_model = DataParallel(
+                    eval_model.cuda(cfg.gpu_ids[0]), device_ids=cfg.gpu_ids)
+        model_to_wrap = model
 
     if 'runner' not in cfg:
         cfg.runner = {
@@ -107,13 +176,17 @@ def custom_train_detector(model,
     else:
         if 'total_epochs' in cfg:
             assert cfg.total_epochs == cfg.runner.max_epochs
+    # When using DeepSpeed, pass None as optimizer to the runner
+    # DeepSpeed engine handles optimization internally
+    runner_optimizer = None if using_deepspeed else optimizer
+    
     if eval_model is not None:
         runner = build_runner(
             cfg.runner,
             default_args=dict(
-                model=model,
+                model=model_to_wrap,
                 eval_model=eval_model,
-                optimizer=optimizer,
+                optimizer=runner_optimizer,
                 work_dir=cfg.work_dir,
                 logger=logger,
                 meta=meta))
@@ -121,8 +194,8 @@ def custom_train_detector(model,
         runner = build_runner(
             cfg.runner,
             default_args=dict(
-                model=model,
-                optimizer=optimizer,
+                model=model_to_wrap,
+                optimizer=runner_optimizer,
                 work_dir=cfg.work_dir,
                 logger=logger,
                 meta=meta))

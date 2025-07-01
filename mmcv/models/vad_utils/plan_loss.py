@@ -5,6 +5,23 @@ from mmcv.models.losses.utils import weighted_loss
 from mmcv.models.builder import LOSSES
 
 
+def safe_norm(x, y=None, dim=-1, clamp_range=(-100, 100)):
+    """Compute torch.linalg.norm with clamping to prevent FP16 overflow."""
+    if y is not None:
+        x = x - y
+    
+    # First clamp to prevent overflow in norm computation
+    x = torch.clamp(x, min=clamp_range[0], max=clamp_range[1])
+    
+    # Compute norm with additional safety checks
+    norm = torch.linalg.norm(x, dim=dim)
+    
+    # Replace any NaN or Inf with a large but finite value
+    norm = torch.nan_to_num(norm, nan=100.0, posinf=100.0, neginf=-100.0)
+    
+    return norm
+
+
 @LOSSES.register_module()
 class PlanMapBoundLoss(nn.Module):
     """Planning constraint to push ego vehicle away from the lane boundary.
@@ -76,7 +93,7 @@ class PlanMapBoundLoss(nn.Module):
         lane_bound_preds[...,1:2] = (lane_bound_preds[..., 1:2] * (self.pc_range[4] -
                                 self.pc_range[1]) + self.pc_range[1])
         # pad not-lane-boundary cls and low confidence preds
-        lane_bound_preds[not_lane_bound_mask] = 1e6
+        lane_bound_preds[not_lane_bound_mask] = torch.finfo(lane_bound_preds.dtype).max
 
         loss_bbox = self.loss_weight * plan_map_bound_loss(ego_fut_preds, lane_bound_preds,
                                                            weight=weight, dis_thresh=self.dis_thresh,
@@ -104,7 +121,7 @@ def plan_map_bound_loss(pred, target, dis_thresh=1.0):
     _, V, P, _ = target.size()
     ego_traj_expanded = ego_traj_ends.unsqueeze(2).unsqueeze(3)  # [B, T, 1, 1, 2]
     maps_expanded = target.unsqueeze(1)  # [1, 1, M, P, 2]
-    dist = torch.linalg.norm(ego_traj_expanded - maps_expanded, dim=-1)  # [B, T, M, P]
+    dist = safe_norm(ego_traj_expanded, maps_expanded, dim=-1)  # [B, T, M, P]
     dist = dist.min(dim=-1, keepdim=False)[0]
     min_inst_idxs = torch.argmin(dist, dim=-1).tolist()
     batch_idxs = [[i] for i in range(dist.shape[0])]
@@ -124,7 +141,7 @@ def plan_map_bound_loss(pred, target, dis_thresh=1.0):
 
     target = target.view(target.shape[0], -1, target.shape[-1])
     # [B, fut_ts, num_vec*num_pts]
-    dist = torch.linalg.norm(pred[:, :, None, :] - target[:, None, :, :], dim=-1)
+    dist = safe_norm(pred[:, :, None, :], target[:, None, :, :], dim=-1)
     min_idxs = torch.argmin(dist, dim=-1).tolist()
     batch_idxs = [[i] for i in range(dist.shape[0])]
     ts_idxs = [[i for i in range(dist.shape[1])] for j in range(dist.shape[0])]
@@ -160,6 +177,8 @@ def segments_intersect(line1_start, line1_end, line2_start, line2_end):
           - (line2_start[:, 1] - line1_start[:, 1]) * dx2) / det
     t2 = ((line2_start[:, 0] - line1_start[:, 0]) * dy1 
           - (line2_start[:, 1] - line1_start[:, 1]) * dx1) / det
+    t1 = torch.nan_to_num(t1, nan=-1.0, posinf=-1.0, neginf=-1.0)
+    t2 = torch.nan_to_num(t2, nan=-1.0, posinf=-1.0, neginf=-1.0)
 
     # Checking intersection conditions
     intersect_mask = torch.logical_and(
@@ -237,10 +256,10 @@ class PlanCollisionLoss(nn.Module):
         agent_max_score_preds, agent_max_score_idxs = agent_score_preds.max(dim=-1)
         not_valid_agent_mask = agent_max_score_preds < self.agent_thresh
         # filter low confidence preds
-        agent_fut_preds[not_valid_agent_mask] = 1e6
+        agent_fut_preds[not_valid_agent_mask] = torch.finfo(agent_fut_preds.dtype).max
         # filter not vehicle preds
         not_veh_pred_mask = agent_max_score_idxs > 4  # veh idxs are 0-4
-        agent_fut_preds[not_veh_pred_mask] = 1e6
+        agent_fut_preds[not_veh_pred_mask] = torch.finfo(agent_fut_preds.dtype).max
         # only use best mode pred
         best_mode_idxs = torch.argmax(agent_fut_cls_preds, dim=-1).tolist()
         batch_idxs = [[i] for i in range(agent_fut_cls_preds.shape[0])]
@@ -280,10 +299,13 @@ def plan_col_loss(
     pred = pred.cumsum(dim=-2)
     agent_fut_preds = agent_fut_preds.cumsum(dim=-2)
     target = target[:, :, None, :] + agent_fut_preds
+    # Clamp values to prevent overflow in FP16
+    pred = torch.clamp(pred, min=-100, max=100)
+    target = torch.clamp(target, min=-100, max=100)
     # filter distant agents from ego vehicle
-    dist = torch.linalg.norm(pred[:, None, :, :] - target, dim=-1)
+    dist = safe_norm(pred[:, None, :, :], target, dim=-1)
     dist_mask = dist > dis_thresh
-    target[dist_mask] = 1e6
+    target[dist_mask] = torch.finfo(target.dtype).max
 
     # [B, num_agent, fut_ts]
     x_dist = torch.abs(pred[:, None, :, 0] - target[..., 0])
@@ -374,7 +396,7 @@ class PlanMapDirectionLoss(nn.Module):
         lane_div_preds[...,1:2] = (lane_div_preds[..., 1:2] * (self.pc_range[4] -
                                 self.pc_range[1]) + self.pc_range[1])
         # pad not-lane-divider cls and low confidence preds
-        lane_div_preds[not_lane_div_mask] = 1e6
+        lane_div_preds[not_lane_div_mask] = torch.finfo(lane_div_preds.dtype).max
 
         loss_bbox = self.loss_weight * plan_map_dir_loss(ego_fut_preds, lane_div_preds,
                                                            weight=weight, dis_thresh=self.dis_thresh,
@@ -395,12 +417,12 @@ def plan_map_dir_loss(pred, target, dis_thresh=2.0):
     """
     num_map_pts = target.shape[2]
     pred = pred.cumsum(dim=-2)
-    traj_dis = torch.linalg.norm(pred[:, -1, :] - pred[:, 0, :], dim=-1)
+    traj_dis = safe_norm(pred[:, -1, :], pred[:, 0, :], dim=-1)
     static_mask = traj_dis < 1.0
     target = target.unsqueeze(1).repeat(1, pred.shape[1], 1, 1, 1)
 
     # find the closest map instance for ego at each timestamp
-    dist = torch.linalg.norm(pred[:, :, None, None, :] - target, dim=-1)
+    dist = safe_norm(pred[:, :, None, None, :], target, dim=-1)
     dist = dist.min(dim=-1, keepdim=False)[0]
     min_inst_idxs = torch.argmin(dist, dim=-1).tolist()
     batch_idxs = [[i] for i in range(dist.shape[0])]
@@ -408,7 +430,7 @@ def plan_map_dir_loss(pred, target, dis_thresh=2.0):
     target_map_inst = target[batch_idxs, ts_idxs, min_inst_idxs]  # [B, fut_ts, num_pts, 2]
 
     # calculate distance
-    dist = torch.linalg.norm(pred[:, :, None, :] - target_map_inst, dim=-1)
+    dist = safe_norm(pred[:, :, None, :], target_map_inst, dim=-1)
     min_pts_idxs = torch.argmin(dist, dim=-1)
     min_pts_next_idxs = min_pts_idxs.clone()
     is_end_point = (min_pts_next_idxs == num_map_pts-1)
@@ -417,16 +439,17 @@ def plan_map_dir_loss(pred, target, dis_thresh=2.0):
     min_pts_next_idxs[not_end_point] = min_pts_next_idxs[not_end_point] + 1
     min_pts_idxs = min_pts_idxs.tolist()
     min_pts_next_idxs = min_pts_next_idxs.tolist()
-    traj_yaw = torch.atan2(torch.diff(pred[..., 1]), torch.diff(pred[..., 0]))  # [B, fut_ts-1]
+    eps = torch.finfo(pred.dtype).eps  # Use dtype-aware epsilon
+    traj_yaw = torch.atan2(torch.diff(pred[..., 1]), torch.diff(pred[..., 0]) + eps)  # [B, fut_ts-1]
     # last ts yaw assume same as previous
     traj_yaw = torch.cat([traj_yaw, traj_yaw[:, [-1]]], dim=-1)  # [B, fut_ts]
     min_pts = target_map_inst[batch_idxs, ts_idxs, min_pts_idxs]
-    dist = torch.linalg.norm(min_pts - pred, dim=-1)
+    dist = safe_norm(min_pts, pred, dim=-1)
     dist_mask = dist > dis_thresh
     min_pts = min_pts.unsqueeze(2)
     min_pts_next = target_map_inst[batch_idxs, ts_idxs, min_pts_next_idxs].unsqueeze(2)
     map_pts = torch.cat([min_pts, min_pts_next], dim=2)
-    lane_yaw = torch.atan2(torch.diff(map_pts[..., 1]).squeeze(-1), torch.diff(map_pts[..., 0]).squeeze(-1))  # [B, fut_ts]
+    lane_yaw = torch.atan2(torch.diff(map_pts[..., 1]).squeeze(-1), torch.diff(map_pts[..., 0]).squeeze(-1) + eps)  # [B, fut_ts]
     yaw_diff = traj_yaw - lane_yaw
     yaw_diff[yaw_diff > math.pi] =  yaw_diff[yaw_diff > math.pi] - math.pi
     yaw_diff[yaw_diff > math.pi/2] = yaw_diff[yaw_diff > math.pi/2] - math.pi

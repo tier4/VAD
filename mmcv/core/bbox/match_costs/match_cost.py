@@ -45,7 +45,19 @@ class BBoxL1Cost:
             gt_bboxes = bbox_xyxy_to_cxcywh(gt_bboxes)
         elif self.box_format == 'xyxy':
             bbox_pred = bbox_cxcywh_to_xyxy(bbox_pred)
+        
+        # cdist doesn't support FP16, so convert to FP32 if needed
+        input_dtype = bbox_pred.dtype
+        if bbox_pred.dtype == torch.float16:
+            bbox_pred = bbox_pred.float()
+            gt_bboxes = gt_bboxes.float()
+        
         bbox_cost = torch.cdist(bbox_pred, gt_bboxes, p=1)
+        
+        # Convert back to original dtype if needed
+        if input_dtype == torch.float16:
+            bbox_cost = bbox_cost.half()
+            
         return bbox_cost * self.weight
 
 
@@ -205,7 +217,18 @@ class BBox3DL1Cost(object):
         Returns:
             torch.Tensor: bbox_cost value with weight
         """
+        # cdist doesn't support FP16, so convert to FP32 if needed
+        input_dtype = bbox_pred.dtype
+        if bbox_pred.dtype == torch.float16:
+            bbox_pred = bbox_pred.float()
+            gt_bboxes = gt_bboxes.float()
+        
         bbox_cost = torch.cdist(bbox_pred, gt_bboxes, p=1)
+        
+        # Convert back to original dtype if needed
+        if input_dtype == torch.float16:
+            bbox_cost = bbox_cost.half()
+            
         return bbox_cost * self.weight
 
 #@weighted_loss

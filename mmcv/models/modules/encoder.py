@@ -16,6 +16,7 @@ from mmcv.utils import force_fp32, auto_fp16
 import numpy as np
 import torch
 import cv2 as cv
+from torch.utils.checkpoint import checkpoint
 from mmcv.utils import TORCH_VERSION, digit_version
 from mmcv.utils import ext_loader
 ext_module = ext_loader.load_ext(
@@ -259,6 +260,8 @@ class BEVFormerLayer(MyCustomBaseTransformerLayer):
             Default: `LN`.
         ffn_num_fcs (int): The number of fully-connected layers in FFNs.
             Default: 2.
+        use_checkpoint (bool): Whether to use activation checkpointing 
+            to save memory. Default: False.
     """
 
     def __init__(self,
@@ -269,6 +272,7 @@ class BEVFormerLayer(MyCustomBaseTransformerLayer):
                  act_cfg=dict(type='ReLU', inplace=True),
                  norm_cfg=dict(type='LN'),
                  ffn_num_fcs=2,
+                 use_checkpoint=False,
                  **kwargs):
         super(BEVFormerLayer, self).__init__(
             attn_cfgs=attn_cfgs,
@@ -280,6 +284,7 @@ class BEVFormerLayer(MyCustomBaseTransformerLayer):
             ffn_num_fcs=ffn_num_fcs,
             **kwargs)
         self.fp16_enabled = False
+        self.use_checkpoint = use_checkpoint
         assert len(operation_order) == 6
         assert set(operation_order) == set(
             ['self_attn', 'norm', 'cross_attn', 'ffn'])
@@ -335,10 +340,57 @@ class BEVFormerLayer(MyCustomBaseTransformerLayer):
             Tensor: forwarded results with shape [num_queries, bs, embed_dims].
         """
 
+        if self.use_checkpoint and self.training:
+            # Use activation checkpointing
+            def create_custom_forward(module):
+                def custom_forward(*inputs):
+                    return module._forward(*inputs)
+                return custom_forward
+            
+            return checkpoint(
+                create_custom_forward(self),
+                query, key, value, bev_pos, query_pos, key_pos,
+                attn_masks, query_key_padding_mask, key_padding_mask,
+                ref_2d, ref_3d, bev_h, bev_w, reference_points_cam,
+                mask, spatial_shapes, level_start_index, prev_bev,
+                use_reentrant=False
+            )
+        else:
+            # Standard forward pass
+            return self._forward(
+                query, key, value, bev_pos, query_pos, key_pos,
+                attn_masks, query_key_padding_mask, key_padding_mask,
+                ref_2d, ref_3d, bev_h, bev_w, reference_points_cam,
+                mask, spatial_shapes, level_start_index, prev_bev,
+                **kwargs
+            )
+    
+    def _forward(self, 
+                 query,
+                 key=None,
+                 value=None,
+                 bev_pos=None,
+                 query_pos=None,
+                 key_pos=None,
+                 attn_masks=None,
+                 query_key_padding_mask=None,
+                 key_padding_mask=None,
+                 ref_2d=None,
+                 ref_3d=None,
+                 bev_h=None,
+                 bev_w=None,
+                 reference_points_cam=None,
+                 mask=None,
+                 spatial_shapes=None,
+                 level_start_index=None,
+                 prev_bev=None,
+                 **kwargs):
+        """Internal forward function that can be wrapped with activation checkpointing."""
         norm_index = 0
         attn_index = 0
         ffn_index = 0
         identity = query
+        
         if attn_masks is None:
             attn_masks = [None for _ in range(self.num_attn)]
         elif isinstance(attn_masks, torch.Tensor):
@@ -356,7 +408,6 @@ class BEVFormerLayer(MyCustomBaseTransformerLayer):
         for layer in self.operation_order:
             # temporal self attention
             if layer == 'self_attn':
-
                 query = self.attentions[attn_index](
                     query,
                     prev_bev,

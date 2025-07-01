@@ -664,9 +664,13 @@ class VADHead(DETRHead):
                 # position encoding
                 if self.use_pe:
                     (num_query, batch) = ca_motion_query.shape[:2] 
-                    motion_pos = torch.zeros((num_query, batch, 2), device=motion_hs.device)
+                    # Create motion_pos with the same dtype as the model weights
+                    motion_pos = torch.zeros((num_query, batch, 2), device=motion_hs.device, dtype=motion_hs.dtype)
                     motion_pos = self.pos_mlp(motion_pos)
                     map_pos = map_pos.permute(1, 0, 2)
+                    # Ensure map_pos has the same dtype as the model
+                    if hasattr(self.pos_mlp, 'weight') and map_pos.dtype != self.pos_mlp.weight.dtype:
+                        map_pos = map_pos.to(dtype=self.pos_mlp.weight.dtype)
                     map_pos = self.pos_mlp(map_pos)
                 else:
                     motion_pos, map_pos = None, None
@@ -715,7 +719,7 @@ class VADHead(DETRHead):
             ego_his_feats = self.ego_query.weight.unsqueeze(0).repeat(batch, 1, 1)
         # Interaction
         ego_query = ego_his_feats
-        ego_pos = torch.zeros((batch, 1, 2), device=ego_query.device)
+        ego_pos = torch.zeros((batch, 1, 2), device=ego_query.device, dtype=ego_query.dtype)
         ego_pos_emb = self.ego_agent_pos_mlp(ego_pos)
         agent_conf = outputs_classes[-1]
         agent_query = motion_hs.reshape(batch, num_agent, -1)
@@ -736,7 +740,7 @@ class VADHead(DETRHead):
             key_padding_mask=agent_mask)
 
         # ego <-> map interaction
-        ego_pos = torch.zeros((batch, 1, 2), device=agent_query.device)
+        ego_pos = torch.zeros((batch, 1, 2), device=agent_query.device, dtype=agent_query.dtype)
         ego_pos_emb = self.ego_map_pos_mlp(ego_pos)
         map_query = map_hs[-1].view(batch_size, self.map_num_vec, self.map_num_pts_per_vec, -1)
         map_query = self.lane_encoder(map_query)  # [B, P, pts, D] -> [B, P, D]
@@ -873,6 +877,14 @@ class VADHead(DETRHead):
                 - pos_inds (Tensor): Sampled positive indices for each image.
                 - neg_inds (Tensor): Sampled negative indices for each image.
         """
+        # Ensure all ground truth data is on the same device and dtype as predictions
+        device = bbox_pred.device
+        dtype = bbox_pred.dtype
+        
+        # Move all ground truth to correct device (labels stay as long dtype)
+        gt_labels = gt_labels.to(device)
+        gt_bboxes = gt_bboxes.to(device=device, dtype=dtype)
+        gt_attr_labels = gt_attr_labels.to(device=device, dtype=dtype)
 
         num_bboxes = bbox_pred.size(0)
         # assigner and sampler
@@ -889,38 +901,35 @@ class VADHead(DETRHead):
         pos_inds = sampling_result.pos_inds
         neg_inds = sampling_result.neg_inds
 
-        # label targets
-        labels = gt_bboxes.new_full((num_bboxes,),
-                                    self.num_classes,
-                                    dtype=torch.long)
+        # label targets - use bbox_pred.new_full to ensure correct device
+        labels = bbox_pred.new_full((num_bboxes,), self.num_classes, dtype=torch.long)
         labels[pos_inds] = gt_labels[sampling_result.pos_assigned_gt_inds]
-        label_weights = gt_bboxes.new_ones(num_bboxes)
+        label_weights = bbox_pred.new_ones(num_bboxes, dtype=dtype)
 
-        # bbox targets
-        bbox_targets = torch.zeros_like(bbox_pred)[..., :gt_bbox_c]
-        bbox_weights = torch.zeros_like(bbox_pred)
+        # bbox targets - use new_zeros to inherit device and dtype
+        bbox_targets = bbox_pred.new_zeros(num_bboxes, gt_bbox_c)
+        bbox_weights = bbox_pred.new_zeros(bbox_pred.shape)
         bbox_weights[pos_inds] = 1.0
 
-        # trajs targets
-        traj_targets = torch.zeros((num_bboxes, gt_traj_c), dtype=torch.float32, device=bbox_pred.device)
-        traj_weights = torch.zeros_like(traj_targets)
+        # trajs targets - use new_zeros to inherit device and dtype
+        traj_targets = bbox_pred.new_zeros(num_bboxes, gt_traj_c)
+        traj_weights = bbox_pred.new_zeros(num_bboxes, gt_traj_c)
         traj_targets[pos_inds] = gt_fut_trajs[sampling_result.pos_assigned_gt_inds]
         traj_weights[pos_inds] = 1.0
 
         # Filter out invalid fut trajs
-        traj_masks = torch.zeros_like(traj_targets)  # [num_bboxes, fut_ts*2]
-        gt_fut_masks = gt_fut_masks.unsqueeze(-1).repeat(1, 1, 2).view(num_gt_bbox, -1)  # [num_gt_bbox, fut_ts*2]
+        traj_masks = bbox_pred.new_zeros(num_bboxes, gt_traj_c)
+        gt_fut_masks = gt_fut_masks.unsqueeze(-1).repeat(1, 1, 2).view(num_gt_bbox, -1)
         traj_masks[pos_inds] = gt_fut_masks[sampling_result.pos_assigned_gt_inds]
         traj_weights = traj_weights * traj_masks
 
         # Extra future timestamp mask for controlling pred horizon
-        fut_ts_mask = torch.zeros((num_bboxes, self.fut_ts, 2),
-                                   dtype=torch.float32, device=bbox_pred.device)
+        fut_ts_mask = bbox_pred.new_zeros(num_bboxes, self.fut_ts, 2)
         fut_ts_mask[:, :self.valid_fut_ts, :] = 1.0
         fut_ts_mask = fut_ts_mask.view(num_bboxes, -1)
         traj_weights = traj_weights * fut_ts_mask
 
-        # DETR
+        # DETR - pos_gt_bboxes is already in correct dtype from sampling
         bbox_targets[pos_inds] = sampling_result.pos_gt_bboxes
 
         return (
@@ -960,9 +969,19 @@ class VADHead(DETRHead):
                 - pos_inds (Tensor): Sampled positive indices for each image.
                 - neg_inds (Tensor): Sampled negative indices for each image.
         """
+        # Ensure all ground truth data is on the same device and dtype as predictions
+        device = bbox_pred.device
+        dtype = bbox_pred.dtype
+        
+        # Move all ground truth to correct device (labels stay as long dtype)
+        gt_labels = gt_labels.to(device)
+        gt_bboxes = gt_bboxes.to(device=device, dtype=dtype)
+        gt_shifts_pts = gt_shifts_pts.to(device=device, dtype=dtype)
+        
         num_bboxes = bbox_pred.size(0)
         # assigner and sampler
         gt_c = gt_bboxes.shape[-1]
+            
         assign_result, order_index = self.map_assigner.assign(bbox_pred, cls_score, pts_pred,
                                              gt_bboxes, gt_labels, gt_shifts_pts,
                                              gt_bboxes_ignore)
@@ -971,28 +990,34 @@ class VADHead(DETRHead):
                                               gt_bboxes)
         pos_inds = sampling_result.pos_inds
         neg_inds = sampling_result.neg_inds
-        # label targets
-        labels = gt_bboxes.new_full((num_bboxes,),
-                                    self.map_num_classes,
-                                    dtype=torch.long)
+        
+        # label targets - use bbox_pred.new_full to ensure correct device
+        labels = bbox_pred.new_full((num_bboxes,), self.map_num_classes, dtype=torch.long)
         labels[pos_inds] = gt_labels[sampling_result.pos_assigned_gt_inds]
-        label_weights = gt_bboxes.new_ones(num_bboxes)
-        # bbox targets
-        bbox_targets = torch.zeros_like(bbox_pred)[..., :gt_c]
-        bbox_weights = torch.zeros_like(bbox_pred)
+        label_weights = bbox_pred.new_ones(num_bboxes, dtype=dtype)
+        
+        # bbox targets - use new_zeros to inherit device and dtype
+        bbox_targets = bbox_pred.new_zeros(num_bboxes, gt_c)
+        bbox_weights = bbox_pred.new_zeros(bbox_pred.shape)
         bbox_weights[pos_inds] = 1.0
+        
         # pts targets
         if order_index is None:
             assigned_shift = gt_labels[sampling_result.pos_assigned_gt_inds]
         else:
+            # Ensure order_index is on correct device if it's a tensor
+            if hasattr(order_index, 'device') and order_index.device != device:
+                order_index = order_index.to(device)
             assigned_shift = order_index[sampling_result.pos_inds, sampling_result.pos_assigned_gt_inds]
-        pts_targets = pts_pred.new_zeros((pts_pred.size(0),
-                        pts_pred.size(1), pts_pred.size(2)))
-        pts_weights = torch.zeros_like(pts_targets)
+        
+        # Use pts_pred to inherit device and dtype
+        pts_targets = pts_pred.new_zeros(pts_pred.shape)
+        pts_weights = pts_pred.new_zeros(pts_pred.shape)
         pts_weights[pos_inds] = 1.0
+        
         # DETR
         bbox_targets[pos_inds] = sampling_result.pos_gt_bboxes
-        pts_targets[pos_inds] = gt_shifts_pts[sampling_result.pos_assigned_gt_inds,assigned_shift,:,:]
+        pts_targets[pos_inds] = gt_shifts_pts[sampling_result.pos_assigned_gt_inds, assigned_shift, :, :]
         return (labels, label_weights, bbox_targets, bbox_weights,
                 pts_targets, pts_weights,
                 pos_inds, neg_inds)
@@ -1135,6 +1160,10 @@ class VADHead(DETRHead):
             loss_plan_col (Tensor): planning col constraint loss.
             loss_plan_dir (Tensor): planning directional constraint loss.
         """
+        device = ego_fut_preds.device
+        ego_fut_gt = ego_fut_gt.to(device)
+        ego_fut_masks = ego_fut_masks.to(device)
+        ego_fut_cmd = ego_fut_cmd.to(device)
 
         ego_fut_gt = ego_fut_gt.unsqueeze(1).repeat(1, self.ego_fut_mode, 1, 1)
         loss_plan_l1_weight = ego_fut_cmd[..., None, None] * ego_fut_masks[:, None, :, None]
@@ -1174,6 +1203,13 @@ class VADHead(DETRHead):
             loss_plan_bound = torch.nan_to_num(loss_plan_bound)
             loss_plan_col = torch.nan_to_num(loss_plan_col)
             loss_plan_dir = torch.nan_to_num(loss_plan_dir)
+        
+        # Clamp losses to prevent extreme values that cause FP16 overflow
+        max_loss = 100.0  # Safe maximum for FP16
+        loss_plan_l1 = torch.clamp(loss_plan_l1, min=0, max=max_loss)
+        loss_plan_bound = torch.clamp(loss_plan_bound, min=0, max=max_loss)
+        loss_plan_col = torch.clamp(loss_plan_col, min=0, max=max_loss)
+        loss_plan_dir = torch.clamp(loss_plan_dir, min=0, max=max_loss)
         
         loss_plan_dict = dict()
         loss_plan_dict['loss_plan_reg'] = loss_plan_l1
@@ -1297,6 +1333,13 @@ class VADHead(DETRHead):
             loss_bbox = torch.nan_to_num(loss_bbox)
             loss_traj = torch.nan_to_num(loss_traj)
             loss_traj_cls = torch.nan_to_num(loss_traj_cls)
+        
+        # Clamp losses to prevent extreme values that cause FP16 overflow
+        max_loss = 100.0  # Safe maximum for FP16
+        loss_cls = torch.clamp(loss_cls, min=0, max=max_loss)
+        loss_bbox = torch.clamp(loss_bbox, min=0, max=max_loss)
+        loss_traj = torch.clamp(loss_traj, min=0, max=max_loss)
+        loss_traj_cls = torch.clamp(loss_traj_cls, min=0, max=max_loss)
 
         return loss_cls, loss_bbox, loss_traj, loss_traj_cls
 
@@ -1325,7 +1368,7 @@ class VADHead(DETRHead):
         dist = torch.linalg.norm(cum_traj_targets[:, None, :, :] - cum_traj_preds, dim=-1)
         dist = dist * gt_fut_masks[:, None, :]
         dist = dist[..., -1]
-        dist[torch.isnan(dist)] = dist[torch.isnan(dist)] * 0
+        dist = torch.nan_to_num(dist, nan=0.0, posinf=1e10, neginf=-1e10)
         min_mode_idxs = torch.argmin(dist, dim=-1).tolist()
         box_idxs = torch.arange(traj_preds.shape[0]).tolist()
         best_traj_preds = traj_preds[box_idxs, min_mode_idxs, :, :].reshape(-1, self.fut_ts*2)
@@ -1356,7 +1399,7 @@ class VADHead(DETRHead):
         dist = torch.linalg.norm(cum_traj_targets[:, None, :, :] - cum_traj_preds, dim=-1)
         dist = dist * gt_fut_masks[:, None, :]
         dist = dist[..., -1]
-        dist[torch.isnan(dist)] = dist[torch.isnan(dist)] * 0
+        dist = torch.nan_to_num(dist, nan=0.0, posinf=1e10, neginf=-1e10)
         traj_labels = torch.argmin(dist, dim=-1)
         traj_labels[neg_inds] = self.fut_mode
 
@@ -1484,6 +1527,14 @@ class VADHead(DETRHead):
             loss_iou = torch.nan_to_num(loss_iou)
             loss_pts = torch.nan_to_num(loss_pts)
             loss_dir = torch.nan_to_num(loss_dir)
+        
+        # Clamp losses to prevent extreme values that cause FP16 overflow
+        max_loss = 100.0  # Safe maximum for FP16
+        loss_cls = torch.clamp(loss_cls, min=0, max=max_loss)
+        loss_bbox = torch.clamp(loss_bbox, min=0, max=max_loss)
+        loss_iou = torch.clamp(loss_iou, min=0, max=max_loss)
+        loss_pts = torch.clamp(loss_pts, min=0, max=max_loss)
+        loss_dir = torch.clamp(loss_dir, min=0, max=max_loss)
 
         return loss_cls, loss_bbox, loss_iou, loss_pts, loss_dir
 
@@ -1790,8 +1841,8 @@ class VADHead(DETRHead):
             pad_pnum = batch_max_pnum - valid_pnum
             padding_mask = torch.tensor([False], device=map_score.device).repeat(batch_max_pnum)
             if pad_pnum != 0:
-                valid_map_query = torch.cat([valid_map_query, torch.zeros((pad_pnum, dim), device=map_score.device)], dim=0)
-                valid_map_pos = torch.cat([valid_map_pos, torch.zeros((pad_pnum, 2), device=map_score.device)], dim=0)
+                valid_map_query = torch.cat([valid_map_query, torch.zeros((pad_pnum, dim), device=map_score.device, dtype=valid_map_query.dtype)], dim=0)
+                valid_map_pos = torch.cat([valid_map_pos, torch.zeros((pad_pnum, 2), device=map_score.device, dtype=valid_map_pos.dtype)], dim=0)
                 padding_mask[valid_pnum:] = True
             selected_map_query.append(valid_map_query)
             selected_map_pos.append(valid_map_pos)
@@ -1824,8 +1875,8 @@ class VADHead(DETRHead):
         num_batch = selected_padding_mask.shape[0]
         feat_dim = selected_map_query.shape[-1]
         if use_fix_pad:
-            pad_map_query = torch.zeros((num_batch, 1, feat_dim), device=selected_map_query.device)
-            pad_map_pos = torch.ones((num_batch, 1, 2), device=selected_map_pos.device)
+            pad_map_query = torch.zeros((num_batch, 1, feat_dim), device=selected_map_query.device, dtype=selected_map_query.dtype)
+            pad_map_pos = torch.ones((num_batch, 1, 2), device=selected_map_pos.device, dtype=selected_map_pos.dtype)
             pad_lane_mask = torch.tensor([False], device=selected_padding_mask.device).unsqueeze(0).repeat(num_batch, 1)
             selected_map_query = torch.cat([selected_map_query, pad_map_query], dim=1)
             selected_map_pos = torch.cat([selected_map_pos, pad_map_pos], dim=1)
@@ -1874,8 +1925,8 @@ class VADHead(DETRHead):
             pad_qnum = batch_max_qnum - valid_qnum
             padding_mask = torch.tensor([False], device=query_score.device).repeat(batch_max_qnum)
             if pad_qnum != 0:
-                valid_query = torch.cat([valid_query, torch.zeros((pad_qnum, dim), device=query_score.device)], dim=0)
-                valid_query_pos = torch.cat([valid_query_pos, torch.zeros((pad_qnum, 2), device=query_score.device)], dim=0)
+                valid_query = torch.cat([valid_query, torch.zeros((pad_qnum, dim), device=query_score.device, dtype=valid_query.dtype)], dim=0)
+                valid_query_pos = torch.cat([valid_query_pos, torch.zeros((pad_qnum, 2), device=query_score.device, dtype=valid_query_pos.dtype)], dim=0)
                 padding_mask[valid_qnum:] = True
             selected_query.append(valid_query)
             selected_query_pos.append(valid_query_pos)
@@ -1888,8 +1939,8 @@ class VADHead(DETRHead):
         num_batch = selected_padding_mask.shape[0]
         feat_dim = selected_query.shape[-1]
         if use_fix_pad:
-            pad_query = torch.zeros((num_batch, 1, feat_dim), device=selected_query.device)
-            pad_query_pos = torch.ones((num_batch, 1, 2), device=selected_query_pos.device)
+            pad_query = torch.zeros((num_batch, 1, feat_dim), device=selected_query.device, dtype=selected_query.dtype)
+            pad_query_pos = torch.ones((num_batch, 1, 2), device=selected_query_pos.device, dtype=selected_query_pos.dtype)
             pad_mask = torch.tensor([False], device=selected_padding_mask.device).unsqueeze(0).repeat(num_batch, 1)
             selected_query = torch.cat([selected_query, pad_query], dim=1)
             selected_query_pos = torch.cat([selected_query_pos, pad_query_pos], dim=1)

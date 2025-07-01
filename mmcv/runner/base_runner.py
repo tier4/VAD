@@ -206,9 +206,18 @@ class BaseRunner(metaclass=ABCMeta):
             lr = dict()
             for name, optim in self.optimizer.items():
                 lr[name] = [group['lr'] for group in optim.param_groups]
+        elif hasattr(self.model, 'get_lr'):
+            # DeepSpeed model provides get_lr() method
+            lr = self.model.get_lr()
+            if not isinstance(lr, list):
+                lr = [lr]
+        elif hasattr(self.model, 'optimizer') and self.model.optimizer is not None:
+            # Try to get from DeepSpeed's internal optimizer
+            lr = [group['lr'] for group in self.model.optimizer.param_groups]
         else:
-            raise RuntimeError(
-                'lr is not applicable because optimizer does not exist.')
+            # For DeepSpeed or other cases where optimizer is not directly accessible
+            # Return a default value instead of raising error
+            lr = [0.0]
         return lr
 
     def current_momentum(self):
@@ -231,15 +240,19 @@ class BaseRunner(metaclass=ABCMeta):
                     momentums.append(0)
             return momentums
 
-        if self.optimizer is None:
-            raise RuntimeError(
-                'momentum is not applicable because optimizer does not exist.')
-        elif isinstance(self.optimizer, torch.optim.Optimizer):
+        if isinstance(self.optimizer, torch.optim.Optimizer):
             momentums = _get_momentum(self.optimizer)
         elif isinstance(self.optimizer, dict):
             momentums = dict()
             for name, optim in self.optimizer.items():
                 momentums[name] = _get_momentum(optim)
+        elif hasattr(self.model, 'optimizer') and self.model.optimizer is not None:
+            # Try to get from DeepSpeed's internal optimizer
+            momentums = _get_momentum(self.model.optimizer)
+        else:
+            # For DeepSpeed or other cases where optimizer is not directly accessible
+            # Return default values (common defaults for Adam/AdamW)
+            momentums = [0.9]  # or [(0.9, 0.999)] for Adam betas
         return momentums
 
     def register_hook(self, hook, priority='NORMAL'):

@@ -40,7 +40,6 @@ class SamplingResult(util_mixins.NiceRepr):
         else:
             if len(gt_bboxes.shape) < 2:
                 gt_bboxes = gt_bboxes.view(-1, 4)
-
             self.pos_gt_bboxes = gt_bboxes[self.pos_assigned_gt_inds, :]
 
         if assign_result.labels is not None:

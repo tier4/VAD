@@ -110,6 +110,8 @@ def init_dist(launcher, backend='nccl', **kwargs):
         _init_dist_mpi(backend, **kwargs)
     elif launcher == 'slurm':
         _init_dist_slurm(backend, **kwargs)
+    elif launcher == 'deepspeed':
+        _init_dist_deepspeed(backend, **kwargs)
     else:
         raise ValueError(f'Invalid launcher type: {launcher}')
 
@@ -163,6 +165,25 @@ def _init_dist_slurm(backend, port=None):
     os.environ['LOCAL_RANK'] = str(proc_id % num_gpus)
     os.environ['RANK'] = str(proc_id)
     dist.init_process_group(backend=backend)
+
+
+def _init_dist_deepspeed(backend, **kwargs):
+    """Initialize distributed environment for DeepSpeed.
+    
+    DeepSpeed sets up the distributed environment itself, so we just need
+    to ensure the environment variables are properly set.
+    """
+    # DeepSpeed should have already set these environment variables
+    local_rank = int(os.environ.get('LOCAL_RANK', 0))
+    rank = int(os.environ.get('RANK', 0))
+    world_size = int(os.environ.get('WORLD_SIZE', 1))
+    
+    # Set CUDA device
+    torch.cuda.set_device(local_rank)
+    
+    # Initialize process group if not already initialized
+    if not dist.is_initialized():
+        dist.init_process_group(backend=backend, **kwargs)
 
 
 def get_dist_info():

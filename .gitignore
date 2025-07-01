@@ -143,6 +143,10 @@ INFO
 *.pkl
 visualization/
 vis*
+work_dirs/
 
 # experimental files
 .no_*
+
+#
+CLAUDE.md

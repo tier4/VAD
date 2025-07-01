@@ -323,17 +323,31 @@ class CustomMSDeformableAttention(BaseModule):
                 f' 2 or 4, but get {reference_points.shape[-1]} instead.')
         if torch.cuda.is_available() and value.is_cuda:
 
-            # using fp16 deformable attention is unstable because it performs many sum operations
+            # The CUDA kernel doesn't support FP16, so we need to convert to FP32
+            input_dtype = value.dtype
             if value.dtype == torch.float16:
-                MultiScaleDeformableAttnFunction = MultiScaleDeformableAttnFunction_fp32
-            else:
-                MultiScaleDeformableAttnFunction = MultiScaleDeformableAttnFunction_fp32
+                # Convert all inputs to FP32 for the kernel
+                value = value.float()
+                sampling_locations = sampling_locations.float()
+                attention_weights = attention_weights.float()
+            
+            MultiScaleDeformableAttnFunction = MultiScaleDeformableAttnFunction_fp32
             output = MultiScaleDeformableAttnFunction.apply(
                 value, spatial_shapes, level_start_index, sampling_locations,
                 attention_weights, self.im2col_step)
+            
+            # Convert output back to original dtype if needed
+            if input_dtype == torch.float16:
+                output = output.half()
         else:
             output = multi_scale_deformable_attn_pytorch(
                 value, spatial_shapes, sampling_locations, attention_weights)
+
+        # Ensure output has the same dtype as the output_proj weights
+        if hasattr(self.output_proj, 'weight'):
+            weight_dtype = self.output_proj.weight.dtype
+            if output.dtype != weight_dtype:
+                output = output.to(dtype=weight_dtype)
 
         output = self.output_proj(output)
 

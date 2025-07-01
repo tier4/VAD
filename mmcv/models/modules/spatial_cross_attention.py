@@ -169,6 +169,13 @@ class SpatialCrossAttention(BaseModule):
         count = count.permute(1, 2, 0).sum(-1)
         count = torch.clamp(count, min=1.0)
         slots = slots / count[..., None]
+        
+        # Ensure slots has the same dtype as the output_proj weights
+        if hasattr(self.output_proj, 'weight'):
+            weight_dtype = self.output_proj.weight.dtype
+            if slots.dtype != weight_dtype:
+                slots = slots.to(dtype=weight_dtype)
+        
         slots = self.output_proj(slots)
 
         return self.dropout(slots) + inp_residual
@@ -382,13 +389,22 @@ class MSDeformableAttention3D(BaseModule):
         #
 
         if torch.cuda.is_available() and value.is_cuda:
+            # The CUDA kernel doesn't support FP16, so we need to convert to FP32
+            input_dtype = value.dtype
             if value.dtype == torch.float16:
-                MultiScaleDeformableAttnFunction = MultiScaleDeformableAttnFunction_fp32
-            else:
-                MultiScaleDeformableAttnFunction = MultiScaleDeformableAttnFunction_fp32
+                # Convert all inputs to FP32 for the kernel
+                value = value.float()
+                sampling_locations = sampling_locations.float()
+                attention_weights = attention_weights.float()
+            
+            MultiScaleDeformableAttnFunction = MultiScaleDeformableAttnFunction_fp32
             output = MultiScaleDeformableAttnFunction.apply(
                 value, spatial_shapes, level_start_index, sampling_locations,
                 attention_weights, self.im2col_step)
+            
+            # Convert output back to original dtype if needed
+            if input_dtype == torch.float16:
+                output = output.half()
         else:
             output = multi_scale_deformable_attn_pytorch(
                 value, spatial_shapes, sampling_locations, attention_weights)
