@@ -134,7 +134,7 @@ ckpts/
 
 # data
 data
-data/
+data*
 
 # outputs
 outputs*/
@@ -146,3 +146,17 @@ vis*
 
 # experimental files
 .no_*
+
+# training results
+*train*/
+*work_dir*/
+*work_dirs*/
+tiny-t4*/
+t4_new/
+configs/VAD/*_stable.py
+
+# logs
+*.gz
+
+#coding
+CLAUDE.md

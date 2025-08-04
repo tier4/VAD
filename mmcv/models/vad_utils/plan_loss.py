@@ -26,7 +26,7 @@ class PlanMapBoundLoss(nn.Module):
         map_thresh=0.5,
         lane_bound_cls_idx=2,
         dis_thresh=1.0,
-        point_cloud_range=[-15.0, -30.0, -2.0, 15.0, 30.0, 2.0],
+        point_cloud_range=None,
         perception_detach=False
     ):
         super(PlanMapBoundLoss, self).__init__()
@@ -35,7 +35,7 @@ class PlanMapBoundLoss(nn.Module):
         self.map_thresh = map_thresh
         self.lane_bound_cls_idx = lane_bound_cls_idx
         self.dis_thresh = dis_thresh
-        self.pc_range = point_cloud_range
+        self.pc_range = point_cloud_range if point_cloud_range is not None else [-30.0, -16.0, -0.16, 30.0, 16.0, 3.84]
         self.perception_detach = perception_detach
 
     def forward(self,
@@ -194,7 +194,7 @@ class PlanCollisionLoss(nn.Module):
         agent_thresh=0.5,
         x_dis_thresh=1.5,
         y_dis_thresh=3.0,
-        point_cloud_range = [-15.0, -30.0, -2.0, 15.0, 30.0, 2.0]
+        point_cloud_range = None
     ):
         super(PlanCollisionLoss, self).__init__()
         self.reduction = reduction
@@ -202,7 +202,7 @@ class PlanCollisionLoss(nn.Module):
         self.agent_thresh = agent_thresh
         self.x_dis_thresh = x_dis_thresh
         self.y_dis_thresh = y_dis_thresh
-        self.pc_range = point_cloud_range
+        self.pc_range = point_cloud_range if point_cloud_range is not None else [-30.0, -16.0, -0.16, 30.0, 16.0, 3.84]
 
     def forward(self,
                 ego_fut_preds,
@@ -330,7 +330,7 @@ class PlanMapDirectionLoss(nn.Module):
         map_thresh=0.5,
         dis_thresh=2.0,
         lane_div_cls_idx=0,
-        point_cloud_range = [-15.0, -30.0, -2.0, 15.0, 30.0, 2.0]
+        point_cloud_range = None
     ):
         super(PlanMapDirectionLoss, self).__init__()
         self.reduction = reduction
@@ -338,7 +338,7 @@ class PlanMapDirectionLoss(nn.Module):
         self.map_thresh = map_thresh
         self.dis_thresh = dis_thresh
         self.lane_div_cls_idx = lane_div_cls_idx
-        self.pc_range = point_cloud_range
+        self.pc_range = point_cloud_range if point_cloud_range is not None else [-30.0, -16.0, -0.16, 30.0, 16.0, 3.84]
 
     def forward(self,
                 ego_fut_preds,

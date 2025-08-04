@@ -205,7 +205,7 @@ class MSDeformableAttention3D(BaseModule):
                  num_heads=8,
                  num_levels=4,
                  num_points=8,
-                 im2col_step=64,
+                 im2col_step=96,
                  dropout=0.1,
                  batch_first=True,
                  norm_cfg=None,

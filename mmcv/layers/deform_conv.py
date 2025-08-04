@@ -25,7 +25,7 @@ class _DeformConv(Function):
         dilation=1,
         groups=1,
         deformable_groups=1,
-        im2col_step=64,
+        im2col_step=96,
     ):
         if input is not None and input.dim() != 4:
             raise ValueError(

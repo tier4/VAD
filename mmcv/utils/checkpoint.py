@@ -41,7 +41,7 @@ def load_checkpoint(model,
         f'load checkpoint from path: {filename}', logger)
     if not osp.isfile(filename):
         raise IOError(f'{filename} is not a checkpoint file')
-    checkpoint = torch.load(filename, map_location=map_location)
+    checkpoint = torch.load(filename, map_location=map_location, weights_only=False)
     # OrderedDict is a subclass of dict
     if not isinstance(checkpoint, dict):
         raise RuntimeError(

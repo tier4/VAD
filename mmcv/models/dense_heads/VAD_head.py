@@ -280,6 +280,13 @@ class VADHead(DETRHead):
         self.loss_map_pts = build_loss(loss_map_pts)
         self.loss_map_dir = build_loss(loss_map_dir)
         self.loss_plan_reg = build_loss(loss_plan_reg)
+        # Add point_cloud_range to plan loss configs if not present
+        if 'point_cloud_range' not in loss_plan_bound:
+            loss_plan_bound['point_cloud_range'] = self.pc_range
+        if 'point_cloud_range' not in loss_plan_col:
+            loss_plan_col['point_cloud_range'] = self.pc_range
+        if 'point_cloud_range' not in loss_plan_dir:
+            loss_plan_dir['point_cloud_range'] = self.pc_range
         self.loss_plan_bound = build_loss(loss_plan_bound)
         self.loss_plan_col = build_loss(loss_plan_col)
         self.loss_plan_dir = build_loss(loss_plan_dir)
@@ -575,6 +582,10 @@ class VADHead(DETRHead):
             reference = inverse_sigmoid(reference)
             outputs_class = self.cls_branches[lvl](hs[lvl])
             tmp = self.reg_branches[lvl](hs[lvl])
+            
+            # Handle NaN/inf values from regression branch due to gradient explosion
+            if torch.isnan(tmp).any() or torch.isinf(tmp).any():
+                tmp = torch.nan_to_num(tmp, nan=0.0, posinf=10.0, neginf=-10.0)
 
             # TODO: check the shape of reference
             assert reference.shape[-1] == 3

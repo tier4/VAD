@@ -5,6 +5,16 @@
 # ---------------------------------------------
 import argparse
 import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Fix Python 3.10+ compatibility for collections.Iterable
+import collections
+import collections.abc
+for attr in dir(collections.abc):
+    if not hasattr(collections, attr):
+        setattr(collections, attr, getattr(collections.abc, attr))
+
 import torch
 import warnings
 from mmcv.utils import get_dist_info, init_dist, wrap_fp16_model, set_random_seed, Config, DictAction, load_checkpoint
@@ -223,8 +233,8 @@ def main():
         model.PALETTE = dataset.PALETTE
 
     if not distributed:
-        model = DataParallel(model, device_ids=[0])
-        outputs = single_gpu_test(model, data_loader)
+            model = DataParallel(model, device_ids=[0])
+            outputs = single_gpu_test(model, data_loader)
         #outputs = load('results.pkl')
     else:
         model = DistributedDataParallel(

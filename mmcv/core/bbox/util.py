@@ -2,13 +2,17 @@ import torch
 
 
 def normalize_bbox(bboxes, pc_range):
-
+    # Add small epsilon to prevent log(0) or log(negative)
+    eps = 1e-7
+    
     cx = bboxes[..., 0:1]
     cy = bboxes[..., 1:2]
     cz = bboxes[..., 2:3]
-    w = bboxes[..., 3:4].log()
-    l = bboxes[..., 4:5].log()
-    h = bboxes[..., 5:6].log()
+    
+    # Clamp dimensions to prevent log of zero or negative values
+    w = torch.clamp(bboxes[..., 3:4], min=eps).log()
+    l = torch.clamp(bboxes[..., 4:5], min=eps).log()
+    h = torch.clamp(bboxes[..., 5:6], min=eps).log()
 
     rot = bboxes[..., 6:7]
     if bboxes.size(-1) > 7:

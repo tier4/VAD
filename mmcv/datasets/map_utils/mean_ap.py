@@ -141,9 +141,10 @@ def format_res_gt_by_classes(result_path,
                              cls_names=None,
                              num_pred_pts_per_instance=30,
                              eval_use_same_gt_sample_num_flag=False,
-                             pc_range=[-15.0, -30.0, -5.0, 15.0, 30.0, 3.0],
+                             pc_range=None,
                              nproc=24):
     assert cls_names is not None
+    assert pc_range is not None, "pc_range must be provided"
     timer = mmcv.Timer()
     num_fixed_sample_pts = 100
     fix_interval = False
@@ -224,10 +225,11 @@ def eval_map(gen_results,
              cls_names=None,
              logger=None,
              tpfp_fn=None,
-             pc_range=[-15.0, -30.0, -5.0, 15.0, 30.0, 3.0],
+             pc_range=None,
              metric=None,
              num_pred_pts_per_instance=30,
              nproc=24):
+    assert pc_range is not None, "pc_range must be provided"
     timer = mmcv.Timer()
     pool = Pool(nproc)
 

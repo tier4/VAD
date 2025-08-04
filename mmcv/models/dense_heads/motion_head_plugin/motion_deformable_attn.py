@@ -274,7 +274,7 @@ class MotionDeformableAttention(BaseModule):
                  num_points=4,
                  num_steps=1,
                  sample_index=-1,
-                 im2col_step=64,
+                 im2col_step=96,
                  dropout=0.1,
                  bev_range=[-51.2, -51.2, -5.0, 51.2, 51.2, 3.0],
                  voxel_size=[0.2, 0.2, 8],

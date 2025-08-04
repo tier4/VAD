@@ -161,7 +161,7 @@ class CustomMSDeformableAttention(BaseModule):
                  num_heads=8,
                  num_levels=4,
                  num_points=4,
-                 im2col_step=64,
+                 im2col_step=96,
                  dropout=0.1,
                  batch_first=False,
                  norm_cfg=None,

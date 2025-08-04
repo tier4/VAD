@@ -28,7 +28,7 @@ numpy==1.23.0
 einops
 casadi
 torchmetrics
-motmetrics==1.1.3 # Fixed
+motmetrics>=1.2.0 # Fixed
 trimesh
 # pytest related
 pytest
@@ -47,7 +47,7 @@ tabulate
 ephem
 dictor
 onnx 
-onnxsim 
+onnx-simplifier==0.4.36 
 protobuf 
 onnx_graphsurgeon
 pycuda

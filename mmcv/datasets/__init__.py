@@ -12,4 +12,5 @@ from .lyft_dataset import LyftDataset
 from .B2D_dataset import B2D_Dataset
 from .B2D_e2e_dataset import B2D_E2E_Dataset
 from .nuscenes_vad_dataset import VADCustomNuScenesDataset
+from .nuscenes_vad_dataset_tier4 import VADCustomNuScenesDatasetTier4
 from .B2D_vad_dataset import B2D_VAD_Dataset
