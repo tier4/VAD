@@ -9,7 +9,19 @@ _base_ = [
 # If point cloud range is changed, the models should also change their point
 # cloud range accordingly
 point_cloud_range = [-15.0, -30.0, -2.0, 15.0, 30.0, 2.0]
-voxel_size = [0.15, 0.15, 4]
+voxel_size = [0.512, 0.512, 4]
+
+# Calculate grid_size from point_cloud_range and voxel_size
+grid_size = [
+    int((point_cloud_range[3] - point_cloud_range[0]) / voxel_size[0]),  # 30/0.512 = 58
+    int((point_cloud_range[4] - point_cloud_range[1]) / voxel_size[1]),  # 60/0.512 = 117
+    int((point_cloud_range[5] - point_cloud_range[2]) / voxel_size[2])   # 4/4 = 1
+]
+
+# Calculate BEV grid dimensions dynamically from grid_size
+# Note: BEV dimensions are grid_size[1] for height and grid_size[0] for width
+bev_h_ = grid_size[1]  # Height dimension (Y-axis in BEV)
+bev_w_ = grid_size[0]  # Width dimension (X-axis in BEV)
 
 img_norm_cfg = dict(
     mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True)
@@ -40,8 +52,6 @@ _dim_ = 256
 _pos_dim_ = _dim_//2
 _ffn_dim_ = _dim_*2
 _num_levels_ = 1
-bev_h_ = 100
-bev_w_ = 100
 queue_length = 3 # each sequence contains `queue_length` frames.
 total_epochs = 60
 
@@ -291,7 +301,7 @@ model = dict(
         loss_plan_dir=dict(type='PlanMapDirectionLoss', loss_weight=0.5)),
     # model training and testing settings
     train_cfg=dict(pts=dict(
-        grid_size=[512, 512, 1],
+        grid_size=grid_size,
         voxel_size=voxel_size,
         point_cloud_range=point_cloud_range,
         out_size_factor=4,

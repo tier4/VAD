@@ -215,13 +215,22 @@ class VADPerceptionTransformer(BaseModule):
             bev_queries,
             bev_h,
             bev_w,
-            grid_length=[0.512, 0.512],
+            grid_length=None,
             bev_pos=None,
             prev_bev=None,
             **kwargs):
         """
         obtain bev features.
         """
+        
+        # Calculate grid_length if not provided
+        if grid_length is None:
+            # Default calculation based on point_cloud_range and grid dimensions
+            pc_range = kwargs.get('pc_range', [-30.0, -16.0, -0.16, 30.0, 16.0, 3.84])
+            grid_length = [
+                (pc_range[3] - pc_range[0]) / bev_w,  # grid_length_x
+                (pc_range[4] - pc_range[1]) / bev_h   # grid_length_y
+            ]
 
         bs = mlvl_feats[0].size(0)
         bev_queries = bev_queries.unsqueeze(1).repeat(1, bs, 1)
@@ -239,10 +248,10 @@ class VADPerceptionTransformer(BaseModule):
         translation_length = np.sqrt(delta_x ** 2 + delta_y ** 2)
         translation_angle = np.arctan2(delta_y, delta_x) / np.pi * 180
         bev_angle = ego_angle - translation_angle
-        shift_y = translation_length * \
-            np.cos(bev_angle / 180 * np.pi) / grid_length_y / bev_h
         shift_x = translation_length * \
-            np.sin(bev_angle / 180 * np.pi) / grid_length_x / bev_w
+            np.cos(bev_angle / 180 * np.pi) / grid_length_x / bev_w
+        shift_y = translation_length * \
+            np.sin(bev_angle / 180 * np.pi) / grid_length_y / bev_h
         shift_y = shift_y * self.use_shift
         shift_x = shift_x * self.use_shift
         combined_shifts_np = np.array([shift_x, shift_y])

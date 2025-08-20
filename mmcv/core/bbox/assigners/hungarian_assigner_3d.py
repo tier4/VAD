@@ -111,12 +111,30 @@ class HungarianAssigner3D(BaseAssigner):
         normalized_gt_bboxes = normalize_bbox(gt_bboxes, self.pc_range)
     
         reg_cost = self.reg_cost(bbox_pred[:, :8], normalized_gt_bboxes[:, :8])
+        
+        # Check individual costs for invalid values and clamp them
+        eps = 1e-7
+        if torch.isnan(cls_cost).any() or torch.isinf(cls_cost).any():
+            cls_cost = torch.clamp(cls_cost, min=-1e6, max=1e6)
+            cls_cost = torch.where(torch.isnan(cls_cost), torch.zeros_like(cls_cost), cls_cost)
+            
+        if torch.isnan(reg_cost).any() or torch.isinf(reg_cost).any():
+            reg_cost = torch.clamp(reg_cost, min=-1e6, max=1e6)
+            reg_cost = torch.where(torch.isnan(reg_cost), torch.ones_like(reg_cost) * 1e3, reg_cost)
       
         # weighted sum of above two costs
         cost = cls_cost + reg_cost
         
         # 3. do Hungarian matching on CPU using linear_sum_assignment
         cost = cost.detach().cpu()
+        
+        # Check for invalid values (NaN, inf) and replace them
+        if torch.isnan(cost).any() or torch.isinf(cost).any():
+            # Replace NaN and inf values with a large finite value
+            large_cost = 1e6
+            cost = torch.where(torch.isnan(cost) | torch.isinf(cost), 
+                             torch.tensor(large_cost, dtype=cost.dtype), cost)
+        
         if linear_sum_assignment is None:
             raise ImportError('Please run "pip install scipy" '
                               'to install scipy first.')

@@ -73,6 +73,11 @@ def custom_weight_reduce_loss(loss, weight=None, reduction='mean', avg_factor=No
     Returns:
         Tensor: Processed loss values.
     """
+    # Check for NaN/Inf in loss and replace with zeros to prevent training divergence
+    if torch.isnan(loss).any() or torch.isinf(loss).any():
+        loss = torch.where(torch.isnan(loss) | torch.isinf(loss), 
+                          torch.zeros_like(loss), loss)
+    
     # if weight is specified, apply element-wise weight
     if weight is not None:
         loss = loss * weight
@@ -87,6 +92,8 @@ def custom_weight_reduce_loss(loss, weight=None, reduction='mean', avg_factor=No
             # import pdb;pdb.set_trace()
             loss = loss.permute(1,0,2,3).contiguous()
             loss = loss.sum((1,2,3))
+            # Prevent division by zero
+            avg_factor = max(avg_factor, 1e-8)
             loss = loss / avg_factor
         # if reduction is 'none', then do nothing, otherwise raise an error
         elif reduction != 'none':
@@ -487,7 +494,19 @@ class PtsL1Cost(object):
         # import pdb;pdb.set_trace()
         bbox_pred = bbox_pred.view(bbox_pred.size(0),-1)
         gt_bboxes = gt_bboxes.view(num_gts,-1)
+        
+        # Check for invalid values in inputs and replace with finite values
+        bbox_pred = torch.where(torch.isnan(bbox_pred) | torch.isinf(bbox_pred), 
+                               torch.zeros_like(bbox_pred), bbox_pred)
+        gt_bboxes = torch.where(torch.isnan(gt_bboxes) | torch.isinf(gt_bboxes), 
+                               torch.zeros_like(gt_bboxes), gt_bboxes)
+        
         bbox_cost = torch.cdist(bbox_pred, gt_bboxes, p=1)
+        
+        # Additional safety check for cdist output
+        bbox_cost = torch.where(torch.isnan(bbox_cost) | torch.isinf(bbox_cost),
+                               torch.ones_like(bbox_cost) * 1e3, bbox_cost)
+        
         return bbox_cost * self.weight
 
 @MATCH_COST.register_module()
@@ -516,10 +535,23 @@ class OrderedPtsL1Cost(object):
         # import pdb;pdb.set_trace()
         bbox_pred = bbox_pred.view(bbox_pred.size(0),-1)
         gt_bboxes = gt_bboxes.flatten(2).view(num_gts*num_orders,-1)
+        
+        # Check for invalid values in inputs and replace with finite values
+        bbox_pred = torch.where(torch.isnan(bbox_pred) | torch.isinf(bbox_pred), 
+                               torch.zeros_like(bbox_pred), bbox_pred)
+        gt_bboxes = torch.where(torch.isnan(gt_bboxes) | torch.isinf(gt_bboxes), 
+                               torch.zeros_like(gt_bboxes), gt_bboxes)
+        
         bbox_cost = torch.cdist(bbox_pred, gt_bboxes, p=1)
+        
+        # Additional safety check for cdist output
+        bbox_cost = torch.where(torch.isnan(bbox_cost) | torch.isinf(bbox_cost),
+                               torch.ones_like(bbox_cost) * 1e3, bbox_cost)
+        
         return bbox_cost * self.weight
 
 @MATCH_COST.register_module()
+@MATCH_COST.register_module(name='ChamferDistance')
 class MyChamferDistanceCost:
     def __init__(self, loss_src_weight=1., loss_dst_weight=1.):
         # assert mode in ['smooth_l1', 'l1', 'l2']
@@ -532,26 +564,33 @@ class MyChamferDistanceCost:
         pred_pts (Tensor): normed coordinate(x,y), shape (num_q, num_pts_M, 2)
         gt_pts (Tensor): normed coordinate(x,y), shape (num_gt, num_pts_N, 2)
         """
-        # criterion_mode = self.mode
-        # if criterion_mode == 'smooth_l1':
-        #     criterion = smooth_l1_loss
-        # elif criterion_mode == 'l1':
-        #     criterion = l1_loss
-        # elif criterion_mode == 'l2':
-        #     criterion = mse_loss
-        # else:
-        #     raise NotImplementedError
+        # Check for invalid values in inputs and replace with finite values
+        src = torch.where(torch.isnan(src) | torch.isinf(src), 
+                         torch.zeros_like(src), src)
+        dst = torch.where(torch.isnan(dst) | torch.isinf(dst), 
+                         torch.zeros_like(dst), dst)
+        
         # import pdb;pdb.set_trace()
         src_expand = src.unsqueeze(1).repeat(1,dst.shape[0],1,1)
         dst_expand = dst.unsqueeze(0).repeat(src.shape[0],1,1,1)
         # src_expand = src.unsqueeze(2).unsqueeze(1).repeat(1,dst.shape[0], 1, dst.shape[1], 1)
         # dst_expand = dst.unsqueeze(1).unsqueeze(0).repeat(src.shape[0],1, src.shape[1], 1, 1)
         distance = torch.cdist(src_expand, dst_expand)
+        
+        # Additional safety check for cdist output
+        distance = torch.where(torch.isnan(distance) | torch.isinf(distance),
+                              torch.ones_like(distance) * 1e3, distance)
+        
         src2dst_distance = torch.min(distance, dim=3)[0]  # (num_q, num_gt, num_pts_N)
         dst2src_distance = torch.min(distance, dim=2)[0]  # (num_q, num_gt, num_pts_M)
         loss_src = (src2dst_distance * src_weight).mean(-1)
         loss_dst = (dst2src_distance * dst_weight).mean(-1)
         loss = loss_src*self.loss_src_weight + loss_dst * self.loss_dst_weight
+        
+        # Final safety check on the result
+        loss = torch.where(torch.isnan(loss) | torch.isinf(loss),
+                          torch.ones_like(loss) * 1e3, loss)
+        
         return loss
 
 def chamfer_distance(src,

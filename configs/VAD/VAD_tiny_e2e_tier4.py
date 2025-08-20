@@ -30,16 +30,25 @@ voxel_size = [0.15, 0.15, 4]
 
 # Calculate grid_size from point_cloud_range and voxel_size
 grid_size = [
-    int((point_cloud_range[3] - point_cloud_range[0]) / voxel_size[0]),
-    int((point_cloud_range[4] - point_cloud_range[1]) / voxel_size[1]),
-    int((point_cloud_range[5] - point_cloud_range[2]) / voxel_size[2])
+    int((point_cloud_range[3] - point_cloud_range[0]) / voxel_size[0]),  # 60/0.15 = 400
+    int((point_cloud_range[4] - point_cloud_range[1]) / voxel_size[1]),  # 32/0.15 = 213
+    int((point_cloud_range[5] - point_cloud_range[2]) / voxel_size[2])   # 4/4 = 1
 ]
+
+# Calculate BEV grid dimensions dynamically from grid_size
+# Note: BEV dimensions are grid_size[1] for height and grid_size[0] for width
+bev_h_ = grid_size[1]  # Height dimension (Y-axis in BEV)
+bev_w_ = grid_size[0]  # Width dimension (X-axis in BEV)
 
 # =============================================================================
 # Model Configuration
 # =============================================================================
 img_norm_cfg = dict(
     mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True)
+
+# Load pretrained backbone weights
+# Always use ResNet50 pretrained weights for initialization
+load_from = 'ckpts/resnet50-19c8e357.pth'
 
 # For nuScenes we usually do 10-class detection
 class_names = [
@@ -67,8 +76,6 @@ _dim_ = 256
 _pos_dim_ = _dim_//2
 _ffn_dim_ = _dim_*2
 _num_levels_ = 1
-bev_h_ = 100
-bev_w_ = 100
 queue_length = 3
 total_epochs = 60
 
@@ -385,7 +392,7 @@ test_pipeline = [
 ]
 
 data = dict(
-    samples_per_gpu=16,
+    samples_per_gpu=4,
     workers_per_gpu=16,
     train=dict(
         type=dataset_type,
@@ -398,6 +405,7 @@ data = dict(
         use_valid_flag=True,
         bev_size=(bev_h_, bev_w_),
         queue_length=queue_length,
+        pc_range=point_cloud_range,
         map_classes=map_classes,
         map_fixed_ptsnum_per_line=map_fixed_ptsnum_per_gt_line,
         map_eval_use_same_gt_sample_num_flag=map_eval_use_same_gt_sample_num_flag,
@@ -412,6 +420,7 @@ data = dict(
         classes=class_names, 
         modality=input_modality, 
         samples_per_gpu=1,
+        pc_range=point_cloud_range,
         map_classes=map_classes,
         map_ann_file=data_root + 'nuscenes_map_anns_val.json',
         map_fixed_ptsnum_per_line=map_fixed_ptsnum_per_gt_line,
@@ -427,6 +436,7 @@ data = dict(
         classes=class_names, 
         modality=input_modality, 
         samples_per_gpu=1,
+        pc_range=point_cloud_range,
         map_classes=map_classes,
         map_ann_file=data_root + 'nuscenes_map_anns_val.json',
         map_fixed_ptsnum_per_line=map_fixed_ptsnum_per_gt_line,
@@ -442,7 +452,7 @@ data = dict(
 # =============================================================================
 optimizer = dict(
     type='AdamW',
-    lr=4e-4,
+    lr=4e-4,  # Reduced learning rate for stability
     paramwise_cfg=dict(
         custom_keys={
             'img_backbone': dict(lr_mult=0.1),

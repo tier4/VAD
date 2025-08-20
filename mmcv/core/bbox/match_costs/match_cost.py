@@ -45,7 +45,19 @@ class BBoxL1Cost:
             gt_bboxes = bbox_xyxy_to_cxcywh(gt_bboxes)
         elif self.box_format == 'xyxy':
             bbox_pred = bbox_cxcywh_to_xyxy(bbox_pred)
+        
+        # Check for invalid values in inputs
+        bbox_pred = torch.where(torch.isnan(bbox_pred) | torch.isinf(bbox_pred), 
+                               torch.zeros_like(bbox_pred), bbox_pred)
+        gt_bboxes = torch.where(torch.isnan(gt_bboxes) | torch.isinf(gt_bboxes), 
+                               torch.zeros_like(gt_bboxes), gt_bboxes)
+        
         bbox_cost = torch.cdist(bbox_pred, gt_bboxes, p=1)
+        
+        # Additional safety check for cdist output
+        bbox_cost = torch.where(torch.isnan(bbox_cost) | torch.isinf(bbox_cost),
+                               torch.ones_like(bbox_cost) * 1e3, bbox_cost)
+        
         return bbox_cost * self.weight
 
 
@@ -137,8 +149,24 @@ class ClassificationCost:
         # NLL is used, we approximate it in 1 - cls_score[gt_label].
         # The 1 is a constant that doesn't change the matching,
         # so it can be omitted.
+        
+        # Clamp logits to prevent overflow in softmax
+        cls_pred = torch.clamp(cls_pred, min=-100, max=100)
+        cls_pred = torch.where(torch.isnan(cls_pred) | torch.isinf(cls_pred), 
+                              torch.zeros_like(cls_pred), cls_pred)
+        
         cls_score = cls_pred.softmax(-1)
+        
+        # Additional safety check after softmax
+        cls_score = torch.where(torch.isnan(cls_score) | torch.isinf(cls_score),
+                               torch.ones_like(cls_score) / cls_score.size(-1), cls_score)
+        
         cls_cost = -cls_score[:, gt_labels]
+        
+        # Final safety check on cost
+        cls_cost = torch.where(torch.isnan(cls_cost) | torch.isinf(cls_cost),
+                              torch.ones_like(cls_cost), cls_cost)
+        
         return cls_cost * self.weight
 
 
@@ -205,7 +233,18 @@ class BBox3DL1Cost(object):
         Returns:
             torch.Tensor: bbox_cost value with weight
         """
+        # Check for invalid values in inputs and replace with finite values
+        bbox_pred = torch.where(torch.isnan(bbox_pred) | torch.isinf(bbox_pred), 
+                               torch.zeros_like(bbox_pred), bbox_pred)
+        gt_bboxes = torch.where(torch.isnan(gt_bboxes) | torch.isinf(gt_bboxes), 
+                               torch.zeros_like(gt_bboxes), gt_bboxes)
+        
         bbox_cost = torch.cdist(bbox_pred, gt_bboxes, p=1)
+        
+        # Additional safety check for cdist output
+        bbox_cost = torch.where(torch.isnan(bbox_cost) | torch.isinf(bbox_cost),
+                               torch.ones_like(bbox_cost) * 1e3, bbox_cost)
+        
         return bbox_cost * self.weight
 
 #@weighted_loss
