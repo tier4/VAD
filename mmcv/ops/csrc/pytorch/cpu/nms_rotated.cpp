@@ -59,7 +59,13 @@ Tensor nms_rotated_cpu_kernel(const Tensor dets, const Tensor scores,
 Tensor nms_rotated_cpu(const Tensor dets, const Tensor scores,
                        const float iou_threshold) {
   auto result = at::empty({0}, dets.options());
-  AT_DISPATCH_FLOATING_TYPES(dets.type(), "nms_rotated", [&] {
+  // Use scalar_type() for compatibility with both old and new PyTorch versions
+  // dets.type() is deprecated in newer versions, dets.scalar_type() is the replacement
+  #if defined(TORCH_VERSION_MAJOR) && TORCH_VERSION_MAJOR >= 2
+    AT_DISPATCH_FLOATING_TYPES(dets.scalar_type(), "nms_rotated", [&] {
+  #else
+    AT_DISPATCH_FLOATING_TYPES(dets.type(), "nms_rotated", [&] {
+  #endif
     result = nms_rotated_cpu_kernel<scalar_t>(dets, scores, iou_threshold);
   });
   return result;

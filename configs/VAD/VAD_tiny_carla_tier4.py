@@ -27,9 +27,9 @@ voxel_size = [0.5, 0.5, 4]
 
 # Calculate grid_size from point_cloud_range and voxel_size
 grid_size = [
-    int((point_cloud_range[3] - point_cloud_range[0]) / voxel_size[0]),  # 60/0.6 = 100
-    int((point_cloud_range[4] - point_cloud_range[1]) / voxel_size[1]),  # 32/0.6 = 53
-    int((point_cloud_range[5] - point_cloud_range[2]) / voxel_size[2])   # 4/4 = 1
+    int((point_cloud_range[3] - point_cloud_range[0]) / voxel_size[0]), 
+    int((point_cloud_range[4] - point_cloud_range[1]) / voxel_size[1]),  
+    int((point_cloud_range[5] - point_cloud_range[2]) / voxel_size[2])  
 ]
 
 # Calculate BEV grid dimensions dynamically from grid_size
@@ -481,8 +481,8 @@ test_pipeline = [
 ]
 
 data = dict(
-    samples_per_gpu=16,
-    workers_per_gpu=24,
+    samples_per_gpu=1,
+    workers_per_gpu=4,
     train=dict(
         type=dataset_type,
         data_root=data_root,
