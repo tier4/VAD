@@ -58,7 +58,7 @@ class B2D_VAD_Dataset(Custom3DDataset):
         self.MAPCLASSES = list(self.map_element_class.keys())
         self.NUM_MAPCLASSES = len(self.MAPCLASSES)
         self.map_eval_use_same_gt_sample_num_flag = True
-        self.map_ann_file = 'data/infos'
+        self.map_ann_file = os.path.join(self.data_root, 'infos', 'b2d_map_anns_val.json')
         self.eval_cfg  = eval_cfg
         with open(self.map_file,'rb') as f: 
             self.map_infos = pickle.load(f)
@@ -517,12 +517,17 @@ class B2D_VAD_Dataset(Custom3DDataset):
                 gt_vecs = gt_bboxes.instance_list
                 gt_vec_list = []
                 for i, (gt_label, gt_vec) in enumerate(zip(gt_labels, gt_vecs)):
-                    name = mapped_class_names[gt_label]
+                    # Convert gt_label to int if it's a tensor
+                    if hasattr(gt_label, 'item'):
+                        gt_label_value = gt_label.item()
+                    else:
+                        gt_label_value = int(gt_label)
+                    name = mapped_class_names[gt_label_value]
                     anno = dict(
                         pts=np.array(list(gt_vec.coords)),
                         pts_num=len(list(gt_vec.coords)),
                         cls_name=name,
-                        type=gt_label,
+                        type=gt_label_value,
                     )
                     gt_vec_list.append(anno)
                 gt_anno['vectors']=gt_vec_list
@@ -607,15 +612,15 @@ class B2D_VAD_Dataset(Custom3DDataset):
             map_pred_anno['vectors'] = pred_vec_list
             map_pred_annos[sample_token] = map_pred_anno
 
-        # NOTE: Eval on map is VERY SLOW for the first time(about 3 hours) because load map ground trurh is slow. 
+        # NOTE: Eval on map is VERY SLOW for the first time(about 3 hours) because load map ground trurh is slow.
         #       So we do not eval map by default.
-        # if not os.path.exists(self.map_ann_file):
-        #     self._format_gt()
-        # else:
-        #     print(f'{self.map_ann_file} exist, not update')
-        # with open(self.map_ann_file,'r') as f:
-        #     GT_anns = json.load(f)
-        # gt_annos = GT_anns['GTs']
+        if not os.path.exists(self.map_ann_file):
+            self._format_gt()
+        else:
+            print(f'{self.map_ann_file} exist, not update')
+        with open(self.map_ann_file,'r') as f:
+            GT_anns = json.load(f)
+        gt_annos = GT_anns['GTs']
 
         nusc_submissions = {
             'meta': self.modality,
@@ -777,60 +782,60 @@ class B2D_VAD_Dataset(Custom3DDataset):
 
 
         # from mmcv.datasets.map_utils.mean_ap import eval_map
-        # from mmcv.datasets.map_utils.mean_ap import format_res_gt_by_classes
-        # result_path = osp.abspath(result_path)
-        
-        # print('Formating results & gts by classes')
-        # pred_results = load(result_path)
-        # map_results = pred_results['map_results']
-        # gt_anns = load(self.map_ann_file)
-        # map_annotations = gt_anns['GTs']
-        # cls_gens, cls_gts = format_res_gt_by_classes(result_path,
-        #                                              map_results,
-        #                                              map_annotations,
-        #                                              cls_names=self.MAPCLASSES,
-        #                                              num_pred_pts_per_instance=self.polyline_points_num,
-        #                                              eval_use_same_gt_sample_num_flag=self.map_eval_use_same_gt_sample_num_flag,
-        #                                              pc_range=self.point_cloud_range)
-        # map_metrics = map_metric if isinstance(map_metric, list) else [map_metric]
-        # allowed_metrics = ['chamfer', 'iou']
-        # for metric in map_metrics:
-        #     if metric not in allowed_metrics:
-        #         raise KeyError(f'metric {metric} is not supported')
-        # for metric in map_metrics:
-        #     print('-*'*10+f'use metric:{metric}'+'-*'*10)
-        #     if metric == 'chamfer':
-        #         thresholds = [0.5,1.0,1.5]
-        #     elif metric == 'iou':
-        #         thresholds= np.linspace(.5, 0.95, int(np.round((0.95 - .5) / .05)) + 1, endpoint=True)
-        #     cls_aps = np.zeros((len(thresholds),self.NUM_MAPCLASSES))
-        #     for i, thr in enumerate(thresholds):
-        #         print('-*'*10+f'threshhold:{thr}'+'-*'*10)
-        #         mAP, cls_ap = eval_map(
-        #                         map_results,
-        #                         map_annotations,
-        #                         cls_gens,
-        #                         cls_gts,
-        #                         threshold=thr,
-        #                         cls_names=self.MAPCLASSES,
-        #                         logger=logger,
-        #                         num_pred_pts_per_instance=self.polyline_points_num,
-        #                         pc_range=self.point_cloud_range,
-        #                         metric=metric)
-        #         for j in range(self.NUM_MAPCLASSES):
-        #             cls_aps[i, j] = cls_ap[j]['ap']
-        #     for i, name in enumerate(self.MAPCLASSES):
-        #         print('{}: {}'.format(name, cls_aps.mean(0)[i]))
-        #         detail['NuscMap_{}/{}_AP'.format(metric,name)] =  cls_aps.mean(0)[i]
-        #     print('map: {}'.format(cls_aps.mean(0).mean()))
-        #     detail['NuscMap_{}/mAP'.format(metric)] = cls_aps.mean(0).mean()
-        #     for i, name in enumerate(self.MAPCLASSES):
-        #         for j, thr in enumerate(thresholds):
-        #             if metric == 'chamfer':
-        #                 detail['NuscMap_{}/{}_AP_thr_{}'.format(metric,name,thr)]=cls_aps[j][i]
-        #             elif metric == 'iou':
-        #                 if thr == 0.5 or thr == 0.75:
-        #                     detail['NuscMap_{}/{}_AP_thr_{}'.format(metric,name,thr)]=cls_aps[j][i]
+        from mmcv.datasets.map_utils.mean_ap import format_res_gt_by_classes, eval_map
+        result_path = osp.abspath(result_path)
+
+        print('Formating results & gts by classes')
+        pred_results = load(result_path)
+        map_results = pred_results['map_results']
+        gt_anns = load(self.map_ann_file)
+        map_annotations = gt_anns['GTs']
+        cls_gens, cls_gts = format_res_gt_by_classes(result_path,
+                                                     map_results,
+                                                     map_annotations,
+                                                     cls_names=self.MAPCLASSES,
+                                                     num_pred_pts_per_instance=self.polyline_points_num,
+                                                     eval_use_same_gt_sample_num_flag=self.map_eval_use_same_gt_sample_num_flag,
+                                                     pc_range=self.point_cloud_range)
+        map_metrics = map_metric if isinstance(map_metric, list) else [map_metric]
+        allowed_metrics = ['chamfer', 'iou']
+        for metric in map_metrics:
+            if metric not in allowed_metrics:
+                raise KeyError(f'metric {metric} is not supported')
+        for metric in map_metrics:
+            print('-*'*10+f'use metric:{metric}'+'-*'*10)
+            if metric == 'chamfer':
+                thresholds = [0.5,1.0,1.5]
+            elif metric == 'iou':
+                thresholds= np.linspace(.5, 0.95, int(np.round((0.95 - .5) / .05)) + 1, endpoint=True)
+            cls_aps = np.zeros((len(thresholds),self.NUM_MAPCLASSES))
+            for i, thr in enumerate(thresholds):
+                print('-*'*10+f'threshhold:{thr}'+'-*'*10)
+                mAP, cls_ap = eval_map(
+                                map_results,
+                                map_annotations,
+                                cls_gens,
+                                cls_gts,
+                                threshold=thr,
+                                cls_names=self.MAPCLASSES,
+                                logger=logger,
+                                num_pred_pts_per_instance=self.polyline_points_num,
+                                pc_range=self.point_cloud_range,
+                                metric=metric)
+                for j in range(self.NUM_MAPCLASSES):
+                    cls_aps[i, j] = cls_ap[j]['ap']
+            for i, name in enumerate(self.MAPCLASSES):
+                print('{}: {}'.format(name, cls_aps.mean(0)[i]))
+                detail['NuscMap_{}/{}_AP'.format(metric,name)] =  cls_aps.mean(0)[i]
+            print('map: {}'.format(cls_aps.mean(0).mean()))
+            detail['NuscMap_{}/mAP'.format(metric)] = cls_aps.mean(0).mean()
+            for i, name in enumerate(self.MAPCLASSES):
+                for j, thr in enumerate(thresholds):
+                    if metric == 'chamfer':
+                        detail['NuscMap_{}/{}_AP_thr_{}'.format(metric,name,thr)]=cls_aps[j][i]
+                    elif metric == 'iou':
+                        if thr == 0.5 or thr == 0.75:
+                            detail['NuscMap_{}/{}_AP_thr_{}'.format(metric,name,thr)]=cls_aps[j][i]
 
         return detail
     

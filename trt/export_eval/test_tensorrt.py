@@ -46,6 +46,9 @@ import json
 from collections import OrderedDict
 from pathlib import Path
 import ctypes
+from config_utils import (get_bev_dimensions, get_grid_length, get_class_counts, 
+                          get_coordinate_system, get_model_variant_name, 
+                          get_engine_paths, print_config_summary)
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -224,6 +227,17 @@ def main():
         nonshuffler_sampler=cfg.data.nonshuffler_sampler,
     )
 
+    # Extract TRT configuration parameters from config
+    bev_h, bev_w = get_bev_dimensions(cfg)
+    grid_length = get_grid_length(cfg)
+    num_classes, map_num_classes = get_class_counts(cfg)
+    coord_system = get_coordinate_system(cfg)
+    model_variant = get_model_variant_name(cfg)
+    engine_paths = get_engine_paths(cfg)
+    
+    # Print configuration summary
+    print_config_summary(cfg)
+    
     # build the model and load checkpoint
     cfg.model.train_cfg = None
     model = build_model(cfg.model, test_cfg=cfg.get('test_cfg'))
@@ -282,7 +296,11 @@ def main():
         class TrtExtractImgFeatHelper(object):
             def __init__(self) -> None:
                 self.infer = InferTrt()
-                self.infer.read("scratch/vadv1.extract_img_feat/sim_vadv1.extract_img_feat_fp16.engine")
+                # Use dynamic engine path based on config
+                engine_path = str(engine_paths.get('extract_img_feat', 
+                                                   'scratch/vadv1.extract_img_feat/sim_vadv1.extract_img_feat_fp16.engine'))
+                self.infer.read(engine_path)
+                print(f"Loaded engine: {engine_path}")
                 print(self.infer)
 
             def get_func(self):
@@ -312,10 +330,18 @@ def main():
         class TrtPtsBboxHeadHelper(object):
             def __init__(self) -> None:
                 self.infer = InferTrt()
-                self.infer.read("scratch/vadv1.pts_bbox_head.forward/sim_vadv1.pts_bbox_head.forward.engine")
+                # Use dynamic engine paths based on config
+                engine_path = str(engine_paths.get('pts_bbox_head_forward',
+                                                   'scratch/vadv1.pts_bbox_head.forward/sim_vadv1.pts_bbox_head.forward.engine'))
+                self.infer.read(engine_path)
+                print(f"Loaded engine: {engine_path}")
                 print(self.infer)
+                
                 self.infer_prev = InferTrt()
-                self.infer_prev.read("scratch/vadv1_prev.pts_bbox_head.forward/sim_vadv1_prev.pts_bbox_head.forward.engine")
+                engine_path_prev = str(engine_paths.get('pts_bbox_head_forward_prev',
+                                                        'scratch/vadv1_prev.pts_bbox_head.forward/sim_vadv1_prev.pts_bbox_head.forward.engine'))
+                self.infer_prev.read(engine_path_prev)
+                print(f"Loaded prev engine: {engine_path_prev}")
                 print(self.infer_prev)
                 self.func = None
 
@@ -324,17 +350,20 @@ def main():
                 def trt_pts_bbox_head_fwd(self, mlvl_feats, img_metas, prev_bev=None, only_bev=False, ego_his_trajs=None, ego_lcf_feat=None):
                     dev = mlvl_feats[0].device
                     m = fn_lidar2img(img_metas)
-                    m = fn_canbus(mlvl_feats[0], m, 100, 100, [0.6, 0.3])
+                    m = fn_canbus(mlvl_feats[0], m, bev_h, bev_w, grid_length)
                     lidar2img = m[0]["lidar2img"].to(dev)
                     torch.cuda.synchronize()
 
+                    # Calculate BEV embed size dynamically
+                    bev_embed_size = bev_h * bev_w
+                    
                     lut = [
-                        ("bev_embed", [10000, 1, 256]),
-                        ("all_cls_scores", [3, 1, 300, 10]),
+                        ("bev_embed", [bev_embed_size, 1, 256]),
+                        ("all_cls_scores", [3, 1, 300, num_classes]),
                         ("all_bbox_preds", [3, 1, 300, 10]),
                         ("all_traj_preds", [3, 1, 300, 6, 12]),
                         ("all_traj_cls_scores", [3, 1, 300, 6]),
-                        ("map_all_cls_scores", [3, 1, 100, 3]),
+                        ("map_all_cls_scores", [3, 1, 100, map_num_classes]),
                         ("map_all_bbox_preds", [3, 1, 100, 4]),
                         ("map_all_pts_preds", [3, 1, 100, 20, 2]),
                         ("enc_cls_scores", None),

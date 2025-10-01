@@ -14,16 +14,39 @@ _base_ = [
 # =============================================================================
 # Tier4 coordinate system with rear axis center as origin
 # Y->X, -X->Y transformation applied
-point_cloud_range = [-30.0, -16.0, -0.16, 30.0, 16.0, 3.84]
+
+# LiDAR to ego translation (from LiDAR sensor to ground projection of rear axis)
+# These values define the sensor mounting position relative to the ground below rear axis
+wheel_radius = 0.305  # Wheel radius in meters
+lidar_height_above_axis = 1.84  # LiDAR height above rear axis center
+lidar2ego_translation = [0.39, 0.0, lidar_height_above_axis + wheel_radius]  # [x, y, z] in meters
+# X: 0.39m - LiDAR is 0.39m forward from the rear axis center
+# Y: 0.0m - LiDAR is centered laterally (no left/right offset)
+# Z: 2.145m - LiDAR is above ground (1.84m above axis + 0.305m wheel radius)
+
+# Dynamically compute point cloud range based on lidar2ego_translation
+# LiDAR can see ±2.5m from its height, translated to ground origin
+point_cloud_range = [-30.0, -16.0,
+                     lidar2ego_translation[2] - 2.5,  # Min Z: LiDAR height - 2.5m
+                     30.0, 16.0,
+                     lidar2ego_translation[2] + 2.5]   # Max Z: LiDAR height + 2.5m
 
 # Post-processing center range for filtering predictions (5m padding on XY, 0.5m on Z)
-detection_post_center_range = [-35.0, -21.0, -0.66, 35.0, 21.0, 4.34]
+detection_post_center_range = [point_cloud_range[0] - 5.0,  # X min - 5m padding
+                                point_cloud_range[1] - 5.0,  # Y min - 5m padding
+                                point_cloud_range[2] - 0.5,  # Z min - 0.5m padding
+                                point_cloud_range[3] + 5.0,  # X max + 5m padding
+                                point_cloud_range[4] + 5.0,  # Y max + 5m padding
+                                point_cloud_range[5] + 0.5]  # Z max + 0.5m padding
 
 # For map elements (8 values: x_min, y_min repeated for compatibility)
-map_post_center_range = [-35.0, -21.0, -35.0, -21.0, 35.0, 21.0, 35.0, 21.0]
+map_post_center_range = [detection_post_center_range[0], detection_post_center_range[1],  # x_min, y_min
+                         detection_post_center_range[0], detection_post_center_range[1],  # repeated
+                         detection_post_center_range[3], detection_post_center_range[4],  # x_max, y_max
+                         detection_post_center_range[3], detection_post_center_range[4]]  # repeated
 
 # Voxel size for BEV representation
-voxel_size = [0.5, 0.5, 4]
+voxel_size = [0.3, 0.3, 5]
 
 # Calculate grid_size from point_cloud_range and voxel_size
 grid_size = [
@@ -481,8 +504,8 @@ test_pipeline = [
 ]
 
 data = dict(
-    samples_per_gpu=1,
-    workers_per_gpu=4,
+    samples_per_gpu=8,
+    workers_per_gpu=12,
     train=dict(
         type=dataset_type,
         data_root=data_root,
@@ -493,6 +516,7 @@ data = dict(
         test_mode=False,
         bev_size=(bev_h_, bev_w_),
         point_cloud_range=point_cloud_range,
+        lidar2ego_translation=lidar2ego_translation,  # Pass translation config
         queue_length=queue_length,
         sample_interval=5,
         past_frames=past_frames,
@@ -513,6 +537,7 @@ data = dict(
         test_mode=True,
         bev_size=(bev_h_, bev_w_),
         point_cloud_range=point_cloud_range,
+        lidar2ego_translation=lidar2ego_translation,  # Pass translation config
         queue_length=queue_length,
         sample_interval=5,
         past_frames=past_frames,
@@ -534,6 +559,7 @@ data = dict(
         test_mode=True,
         bev_size=(bev_h_, bev_w_),
         point_cloud_range=point_cloud_range,
+        lidar2ego_translation=lidar2ego_translation,  # Pass translation config
         queue_length=queue_length,
         sample_interval=5,
         past_frames=past_frames,
@@ -554,7 +580,7 @@ data = dict(
 # =============================================================================
 optimizer = dict(
     type='AdamW',
-    lr=4e-4,  # Reduced for stability with Tier4 coordinates
+    lr=6e-4,  # Reduced for stability with Tier4 coordinates
     paramwise_cfg=dict(
         custom_keys={
             'img_backbone': dict(lr_mult=0.1),

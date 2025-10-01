@@ -479,10 +479,139 @@ class B2D_VAD_DatasetTier4(B2D_VAD_Dataset):
         
         return info
     
+    def get_ann_info(self, index):
+        """Get annotation info and transform to Tier4 coordinates.
+
+        Overrides parent method to ensure GT bounding boxes and attr_labels
+        are in Tier4 coordinate system for correct collision evaluation.
+
+        Args:
+            index (int): Index of the annotation data to get.
+
+        Returns:
+            dict: Annotation information with Tier4 transformations applied.
+        """
+        # Get annotations from parent class
+        anns_results = super().get_ann_info(index)
+
+        # Transform gt_bboxes_3d to Tier4 coordinates
+        gt_bboxes_3d = anns_results['gt_bboxes_3d']
+        if gt_bboxes_3d is not None and len(gt_bboxes_3d) > 0:
+            # Extract box data
+            box_tensor = gt_bboxes_3d.tensor.numpy()
+
+            # Transform centers (WITH translation for absolute positions)
+            centers = box_tensor[:, :3]
+            centers_transformed = np.array([
+                self.transform_position_to_tier4(center, apply_translation=True)
+                for center in centers
+            ])
+
+            # Keep size unchanged (object-relative)
+            sizes = box_tensor[:, 3:6]
+
+            # Transform yaw angles
+            yaws = box_tensor[:, 6]
+            yaws_transformed = np.array([
+                self.transform_yaw_to_tier4(yaw) for yaw in yaws
+            ])
+
+            # Transform velocities if present (rotation only, no translation)
+            if box_tensor.shape[1] >= 9:
+                velocities = box_tensor[:, 7:9]
+                velocities_transformed = np.array([
+                    self.transform_velocity_to_tier4(vel) for vel in velocities
+                ])
+
+                # Reconstruct box tensor with transformed values
+                new_box_tensor = np.concatenate([
+                    centers_transformed,
+                    sizes,
+                    yaws_transformed.reshape(-1, 1),
+                    velocities_transformed
+                ], axis=1)
+            else:
+                # No velocity
+                new_box_tensor = np.concatenate([
+                    centers_transformed,
+                    sizes,
+                    yaws_transformed.reshape(-1, 1)
+                ], axis=1)
+
+            # Create new LiDARInstance3DBoxes with transformed data
+            from mmcv.core.bbox.structures.lidar_box3d import LiDARInstance3DBoxes
+            gt_bboxes_3d_new = LiDARInstance3DBoxes(
+                new_box_tensor,
+                box_dim=new_box_tensor.shape[-1],
+                origin=(0.5, 0.5, 0.5)
+            ).convert_to(self.box_mode_3d)
+
+            anns_results['gt_bboxes_3d'] = gt_bboxes_3d_new
+
+        # Transform attr_labels
+        if 'attr_labels' in anns_results and anns_results['attr_labels'] is not None:
+            attr_labels = anns_results['attr_labels'].copy()
+
+            if len(attr_labels) > 0:
+                # attr_labels structure (for future_frames=6):
+                # [0:12]: future_track_offset (6*2) - frame-to-frame displacements
+                # [12:18]: future_mask (6) - unchanged
+                # [18:19]: gt_fut_goal (1) - unchanged
+                # [19:28]: agent_lcf_feat (9) breakdown:
+                #   [19:21]: agent center position (2) - absolute position
+                #   [21:22]: agent yaw (1)
+                #   [22:24]: agent velocity (2)
+                #   [24:27]: agent size w,l,h (3) - unchanged
+                #   [27:28]: class index (1) - unchanged
+                # [28:34]: future_yaw_offset (6) - relative angles, unchanged
+
+                frames = self.future_frames
+
+                # Transform future_track_offset (rotation only, no translation)
+                track_offset_end = frames * 2
+                for i in range(len(attr_labels)):
+                    # Reshape to (frames, 2) for transformation
+                    offsets = attr_labels[i, :track_offset_end].reshape(frames, 2)
+                    offsets_transformed = np.array([
+                        self.transform_position_to_tier4(offset, apply_translation=False)
+                        for offset in offsets
+                    ])
+                    attr_labels[i, :track_offset_end] = offsets_transformed.reshape(-1)
+
+                # Transform agent_lcf_feat
+                lcf_start = frames * 2 + frames + 1  # Skip masks and goal
+                for i in range(len(attr_labels)):
+                    # Transform agent position (WITH translation)
+                    agent_pos = attr_labels[i, lcf_start:lcf_start+2]
+                    agent_pos_transformed = self.transform_position_to_tier4(
+                        agent_pos, apply_translation=True
+                    )
+                    attr_labels[i, lcf_start:lcf_start+2] = agent_pos_transformed
+
+                    # Transform agent yaw
+                    agent_yaw = attr_labels[i, lcf_start+2]
+                    agent_yaw_transformed = self.transform_yaw_to_tier4(agent_yaw)
+                    attr_labels[i, lcf_start+2] = agent_yaw_transformed
+
+                    # Transform agent velocity (rotation only)
+                    agent_vel = attr_labels[i, lcf_start+3:lcf_start+5]
+                    agent_vel_transformed = self.transform_velocity_to_tier4(agent_vel)
+                    attr_labels[i, lcf_start+3:lcf_start+5] = agent_vel_transformed
+
+                    # Size (w,l,h) at lcf_start+5:lcf_start+8 stays unchanged
+                    # Class index at lcf_start+8 stays unchanged
+
+                # future_yaw_offset at the end stays unchanged (relative angles)
+
+                anns_results['attr_labels'] = attr_labels
+
+        return anns_results
+
     def evaluate(self, results, *args, **kwargs):
         """
         Evaluate with Tier4 coordinate system.
-        
+
         Results are already in Tier4 coordinates, so evaluation proceeds normally.
         """
         return super().evaluate(results, *args, **kwargs)
+

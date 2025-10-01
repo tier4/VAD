@@ -40,6 +40,9 @@ from mmcv.datasets import (build_dataset, build_dataloader, replace_ImageToTenso
 import time
 import os.path as osp
 import json
+from config_utils import (get_bev_dimensions, get_grid_length, get_class_counts, 
+                          get_coordinate_system, get_model_variant_name, 
+                          get_engine_paths, print_config_summary)
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -219,6 +222,17 @@ def main():
         nonshuffler_sampler=cfg.data.nonshuffler_sampler,
     )
 
+    # Extract TRT configuration parameters from config
+    bev_h, bev_w = get_bev_dimensions(cfg)
+    grid_length = get_grid_length(cfg)
+    num_classes, map_num_classes = get_class_counts(cfg)
+    coord_system = get_coordinate_system(cfg)
+    model_variant = get_model_variant_name(cfg)
+    engine_paths = get_engine_paths(cfg)
+    
+    # Print configuration summary
+    print_config_summary(cfg)
+    
     # build the model and load checkpoint
     cfg.model.train_cfg = None
     model = build_model(cfg.model, test_cfg=cfg.get('test_cfg'))
@@ -297,7 +311,7 @@ def main():
                         m = kwargs["img_metas"]
                         for i in range(len(m)):
                             m[i]["lidar2img"] = torch.from_numpy(np.asarray(m[i]["lidar2img"])).to(torch.float32)
-                        kwargs["img_metas"] = fn_canbus(args[1], m, 100, 100, [0.6, 0.3])
+                        kwargs["img_metas"] = fn_canbus(args[1], m, bev_h, bev_w, grid_length)
                         return args, kwargs
 
                     from patch.patch_head import patch_VADHead_select_and_pad_query, patch_VADPerceptionTransformer_get_bev_features, \
@@ -310,7 +324,7 @@ def main():
                     def fn_fwd(args, kwargs):
                         m = args[1] # kwargs["img_metas"]
                         m = fn_lidar2img(m)
-                        m = fn_canbus(args[0][0], m, 100, 100, [0.6, 0.3])
+                        m = fn_canbus(args[0][0], m, bev_h, bev_w, grid_length)
                         return (args[0], m), kwargs
                     
                     ch.hooks["vadv1.pts_bbox_head.forward"]._patch(patch_VADHead_forward)
